@@ -14,6 +14,6 @@ description: Naming, positioning, one-liners, and voice. Use for "propose names"
 
 ## Procedure
 
-1. Do the work: names (check domain availability via whois/curl BEFORE proposing; ≥8 candidates culled to 3 with reasoning), one-liners (≤10 words), or voice review (verdict + edit, not essays).
+1. Do the work: names (check domain availability via whois/curl BEFORE proposing; ≥8 candidates culled to 3 with reasoning), one-liners (≤10 words), voice review (verdict + edit, not essays), or **positioning** — which always starts from the forcing question: *"What's the one thing someone should remember after seeing this for the first time?"* Present 2–3 candidate answers as directions, each tested against the hostile headline, and recommend exactly one; a positioning brief that ranks nothing decides nothing.
 2. Test each candidate against: the hostile headline, the plain-words rule, and "would the target human forward this?"
 3. Write back: outcomes + rejected-with-why to `docs/learnings/brand.md` (a name rejected twice is a rule, not an accident), BUSINESS.md role log. Commit.
