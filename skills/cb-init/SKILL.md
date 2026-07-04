@@ -11,8 +11,8 @@ CB roles fail without their memory files. This skill creates them, idempotently 
 
 1. Check what exists: `BUSINESS.md`, `STRATEGY.md`, `docs/learnings/`, `outbox/`. Report found/missing.
 2. For each missing piece:
-   - `BUSINESS.md` from `templates/BUSINESS.md` (in this plugin) — fill the current-state section by asking the user 3 questions max: what are you building, what stage, what are your standing rules (things you've decided never to do).
-   - `STRATEGY.md`: if the compound-engineering plugin is installed, recommend `/ce-strategy` (its interview is better). Otherwise seed a stub with Target problem / Approach / Who it's for / Key metrics headers and mark it DRAFT.
+   - `BUSINESS.md` from `templates/BUSINESS.md` (in this plugin) — fill the current-state section by asking the user 3 questions max, verbatim: "What are you building, in one sentence?" / "What stage — and what's blocked on what?" / "What are your standing rules — things you've decided never to do, thresholds you've pre-committed to?" Leave the metrics/decisions placeholders in the template as-is — /analyst and /chief fill them on their first runs (the template's role-log line covers step 4's logging for this run).
+   - `STRATEGY.md`: check whether `/ce-strategy` is actually invocable (it appears in the available-skills list); if yes, recommend it (its interview is better). Otherwise seed a stub with Target problem / Approach / Who it's for / Key metrics headers and mark it DRAFT.
    - `docs/learnings/README.md`: one paragraph explaining the rulebook convention (one file per role; skills read theirs before acting, append after; prune disproven rules with a note).
    - `outbox/`: create with a README line: "Drafts for anything external. Nothing here sends itself."
 3. If the repo isn't git-initialized, offer `git init` — commit hashes are CB's timestamps.
