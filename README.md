@@ -53,6 +53,7 @@ CB is a Claude Code plugin (plain-markdown skills; portable in principle to othe
 - **Write-back contract.** No run ends without updating the dashboard and logging durable lessons.
 - **Verdicts, not vibes.** Gates close with READY/NEEDS WORK/NOT READY or SHIP/FIX — never narrative.
 - **Humans decide.** CB recommends; cross-model or cross-role agreement is a signal, never permission.
+- **Levers are typed.** `DECISIONS.md` registers every decision as LEVER (owner only, after discussion), JUDGMENT (agent decides, logs, flags), or MECHANICAL (silent). The test is blast radius and inheritance, not file reversibility — and /chief audits for levers taken silently, every run.
 
 ## Status & maintenance posture
 
