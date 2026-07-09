@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CB — Compound Business</title>
+<meta name="description" content="Business role skills with a memory that compounds. Every run reads the rules learned before it and writes back what it learned. No lesson is paid for twice.">
+<meta property="og:title" content="CB — Compound Business">
+<meta property="og:description" content="Business role skills with a memory that compounds. No lesson is paid for twice.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>↺</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #faf6ef;
+    --paper-deep: #f2ecdf;
+    --ink: #1c1a15;
+    --ink-soft: #57524a;
+    --rule: #d9d1c0;
+    --accent: #14614a;
+    --accent-soft: #e3ede7;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Fraunces", Georgia, serif;
+    font-weight: 400;
+    line-height: 1.6;
+    font-size: 17px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---------- hero ---------- */
+  header.hero {
+    min-height: 92vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+    overflow: hidden;
+  }
+  .brandline {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 28px;
+  }
+  h1 {
+    font-size: clamp(44px, 8.5vw, 92px);
+    font-weight: 300;
+    line-height: 1.04;
+    letter-spacing: -0.015em;
+    max-width: 11ch;
+  }
+  h1 em { font-style: italic; font-weight: 400; color: var(--accent); }
+  .hero p.sub {
+    margin-top: 30px;
+    max-width: 52ch;
+    font-size: 19px;
+    color: var(--ink-soft);
+  }
+  .hero-ctas { margin-top: 40px; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+  .btn {
+    display: inline-block;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14px;
+    padding: 13px 22px;
+    background: var(--ink);
+    color: var(--paper);
+    text-decoration: none;
+    transition: background 0.2s ease, transform 0.2s ease;
+  }
+  .btn:hover { background: var(--accent); transform: translateY(-1px); }
+  .btn.ghost {
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid var(--ink);
+  }
+  .btn.ghost:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
+
+  /* big rotating glyph, decorative */
+  .hero-glyph {
+    position: absolute;
+    right: -4vw;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: clamp(200px, 38vw, 480px);
+    line-height: 1;
+    color: var(--paper-deep);
+    z-index: -1;
+    user-select: none;
+    animation: spin 60s linear infinite;
+  }
+  @keyframes spin { to { transform: translateY(-50%) rotate(-360deg); } }
+
+  /* entrance */
+  .rise { opacity: 0; transform: translateY(18px); animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.3, 1) forwards; }
+  .rise.d1 { animation-delay: 0.08s; }
+  .rise.d2 { animation-delay: 0.2s; }
+  .rise.d3 { animation-delay: 0.34s; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+
+  /* ---------- sections ---------- */
+  section { padding: 96px 0; border-bottom: 1px solid var(--rule); }
+  .kicker {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 18px;
+  }
+  h2 {
+    font-size: clamp(28px, 4vw, 40px);
+    font-weight: 400;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    max-width: 24ch;
+  }
+  .lede { margin-top: 18px; max-width: 58ch; color: var(--ink-soft); font-size: 18px; }
+
+  /* ---------- the loop ---------- */
+  ol.loop {
+    list-style: none;
+    margin-top: 48px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 15px;
+  }
+  ol.loop li {
+    display: grid;
+    grid-template-columns: 42px 220px 1fr;
+    gap: 18px;
+    align-items: baseline;
+    padding: 18px 14px;
+    border-top: 1px solid var(--rule);
+    transition: background 0.4s ease;
+  }
+  ol.loop li:last-child { border-bottom: 1px solid var(--rule); }
+  ol.loop .n { color: var(--ink-soft); font-size: 13px; }
+  ol.loop .cmd { font-weight: 500; }
+  ol.loop .what { font-family: "Fraunces", Georgia, serif; font-size: 16px; color: var(--ink-soft); }
+  ol.loop li.lit { background: var(--accent-soft); }
+  ol.loop li.lit .cmd { color: var(--accent); }
+  .loop-back {
+    margin-top: 20px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14px;
+    color: var(--accent);
+  }
+  @media (max-width: 640px) {
+    ol.loop li { grid-template-columns: 32px 1fr; }
+    ol.loop .what { grid-column: 2; }
+  }
+
+  /* ---------- roles ---------- */
+  ul.roles { list-style: none; margin-top: 48px; }
+  ul.roles li {
+    border-top: 1px solid var(--rule);
+    display: grid;
+    grid-template-columns: 190px 1fr;
+    gap: 20px;
+    padding: 15px 14px;
+    align-items: baseline;
+    transition: background 0.18s ease, padding-left 0.18s ease;
+  }
+  ul.roles li:last-child { border-bottom: 1px solid var(--rule); }
+  ul.roles li:hover { background: var(--accent-soft); padding-left: 22px; }
+  ul.roles .cmd { font-family: "IBM Plex Mono", monospace; font-size: 15px; font-weight: 500; }
+  ul.roles li:hover .cmd { color: var(--accent); }
+  ul.roles .job { color: var(--ink-soft); font-size: 16px; }
+  @media (max-width: 640px) {
+    ul.roles li { grid-template-columns: 1fr; gap: 4px; }
+  }
+
+  /* ---------- rails ---------- */
+  .rails { margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 1px solid var(--rule); }
+  .rail { padding: 28px 22px 30px 0; border-bottom: 1px solid var(--rule); }
+  .rail:nth-child(odd) { padding-right: 40px; }
+  .rail:nth-child(even) { padding-left: 40px; border-left: 1px solid var(--rule); }
+  .rail h3 { font-family: "IBM Plex Mono", monospace; font-size: 14px; font-weight: 500; letter-spacing: 0.02em; margin-bottom: 10px; }
+  .rail h3::before { content: "— "; color: var(--accent); }
+  .rail p { font-size: 15.5px; color: var(--ink-soft); }
+  @media (max-width: 640px) {
+    .rails { grid-template-columns: 1fr; }
+    .rail:nth-child(even) { padding-left: 0; border-left: none; }
+    .rail:nth-child(odd) { padding-right: 0; }
+  }
+
+  /* ---------- install ---------- */
+  .install-block {
+    margin-top: 44px;
+    background: var(--ink);
+    color: #efe9dc;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14.5px;
+    line-height: 2;
+    padding: 28px 30px;
+    overflow-x: auto;
+  }
+  .install-block .c { color: #8f887b; }
+  .install-block .p { color: #6fbf9f; user-select: none; }
+  .after { margin-top: 26px; max-width: 56ch; color: var(--ink-soft); font-size: 16px; }
+
+  /* ---------- footer ---------- */
+  footer { padding: 56px 0 72px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; align-items: baseline; }
+  footer p { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--ink-soft); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .rise { opacity: 1; transform: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="brandline rise">CB · Compound Business</p>
+    <h1 class="rise d1">No lesson is paid for <em>twice.</em></h1>
+    <p class="sub rise d2">A team of AI business roles — chief, counsel, growth, analyst — where every run reads the rules learned before it and writes back what it learned. The business version of compound engineering.</p>
+    <div class="hero-ctas rise d3">
+      <a class="btn" href="https://github.com/withdhyan/compound-business">Get the skills on GitHub</a>
+      <a class="btn ghost" href="#loop">How it compounds</a>
+    </div>
+  </div>
+  <div class="hero-glyph" aria-hidden="true">↺</div>
+</header>
+
+<section id="loop">
+  <div class="wrap">
+    <p class="kicker">The loop</p>
+    <h2>Role packs for agents exist. They're all stateless.</h2>
+    <p class="lede">Week five's agent doesn't know what week two's learned. CB's whole bet is a weekly cycle where every role reads the rulebook before acting and writes back after — so the same team gets sharper every week it runs.</p>
+    <ol class="loop" id="loopList">
+      <li><span class="n">01</span><span class="cmd">/office-hours</span><span class="what">interrogate the move before you commit to it</span></li>
+      <li><span class="n">02</span><span class="cmd">/chief</span><span class="what">queue the week, enforce the gates</span></li>
+      <li><span class="n">03</span><span class="cmd">roles execute</span><span class="what">drafts land in outbox/ — the human sends</span></li>
+      <li><span class="n">04</span><span class="cmd">/analyst</span><span class="what">measure against pre-stated thresholds</span></li>
+      <li><span class="n">05</span><span class="cmd">/retro</span><span class="what">audit last week's rules, extract new ones, prune the dead</span></li>
+    </ol>
+    <p class="loop-back">↺ next week starts smarter</p>
+  </div>
+</section>
+
+<section id="roles">
+  <div class="wrap">
+    <p class="kicker">The roles</p>
+    <h2>Twelve skills. One rulebook each. One shared memory.</h2>
+    <ul class="roles">
+      <li><span class="cmd">/cb-init</span><span class="job">one-time: seed the memory layer in your repo</span></li>
+      <li><span class="cmd">/office-hours</span><span class="job">forcing-question interrogation of any move before it's committed</span></li>
+      <li><span class="cmd">/chief</span><span class="job">weekly synthesis; verdicts, not vibes: READY / NEEDS WORK / NOT READY</span></li>
+      <li><span class="cmd">/brand</span><span class="job">naming, positioning, one-liners, voice</span></li>
+      <li><span class="cmd">/growth</span><span class="job">funnel and channels — every experiment pre-registers its kill threshold</span></li>
+      <li><span class="cmd">/content</span><span class="job">public writing in your voice, leak-checked against what you've declared quiet</span></li>
+      <li><span class="cmd">/community</span><span class="job">user and customer comms, incident handling</span></li>
+      <li><span class="cmd">/partnerships</span><span class="job">partner and grant pipeline, meeting prep with red lines</span></li>
+      <li><span class="cmd">/counsel</span><span class="job">privacy and compliance review — binary SHIP / FIX; can block a feature</span></li>
+      <li><span class="cmd">/analyst</span><span class="job">metrics vs. pre-committed thresholds; measured ≠ estimated ≠ assumed, loudly</span></li>
+      <li><span class="cmd">/retro</span><span class="job">the compounding ceremony: audit, extract, prune</span></li>
+      <li><span class="cmd">/new-role</span><span class="job">CB grows itself — new roles via skill-TDD, never shipped untested</span></li>
+    </ul>
+  </div>
+</section>
+
+<section id="rails">
+  <div class="wrap">
+    <p class="kicker">The rails</p>
+    <h2>Non-negotiables, built into every role.</h2>
+    <div class="rails">
+      <div class="rail">
+        <h3>Outbox discipline</h3>
+        <p>No tweet, email, or DM leaves without the human. Drafts land in outbox/ and stop there.</p>
+      </div>
+      <div class="rail">
+        <h3>Read-first contract</h3>
+        <p>Every role reads the dashboard, the strategy, and its own learnings file before acting.</p>
+      </div>
+      <div class="rail">
+        <h3>Write-back contract</h3>
+        <p>No run ends without updating the dashboard and logging what was durably learned.</p>
+      </div>
+      <div class="rail">
+        <h3>Verdicts, not vibes</h3>
+        <p>Gates close with READY / NEEDS WORK / NOT READY or SHIP / FIX — never narrative.</p>
+      </div>
+      <div class="rail">
+        <h3>Humans decide</h3>
+        <p>CB recommends. Cross-model or cross-role agreement is a signal, never permission.</p>
+      </div>
+      <div class="rail">
+        <h3>Levers are typed</h3>
+        <p>Every decision is registered as LEVER, JUDGMENT, or MECHANICAL. The test is blast radius, not file reversibility — and /chief audits for levers taken silently.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <p class="kicker">Install</p>
+    <h2>Two commands. Then work.</h2>
+    <div class="install-block" role="figure" aria-label="Install commands">
+      <div><span class="c"># in Claude Code</span></div>
+      <div><span class="p">&gt;</span> /plugin marketplace add withdhyan/compound-business</div>
+      <div><span class="p">&gt;</span> /plugin install cb@compound-business</div>
+      <div>&nbsp;</div>
+      <div><span class="c"># then, in your project — seed the memory layer</span></div>
+      <div><span class="p">&gt;</span> /cb-init</div>
+    </div>
+    <p class="after">/chief on Mondays, /retro on Fridays, roles in between. v0.1 — extracted from a real company run day-one on CB, being built in public. MIT.</p>
+    <div class="hero-ctas">
+      <a class="btn" href="https://github.com/withdhyan/compound-business">github.com/withdhyan/compound-business</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>CB — Compound Business · Holon Research · MIT</p>
+    <p>influences acknowledged: compound-engineering, gstack, Superpowers, BMAD</p>
+  </div>
+</footer>
+
+<script>
+  // slow pulse through the loop steps
+  (function () {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const items = document.querySelectorAll("#loopList li");
+    let i = -1;
+    setInterval(function () {
+      if (i >= 0) items[i].classList.remove("lit");
+      i = (i + 1) % items.length;
+      items[i].classList.add("lit");
+    }, 1600);
+  })();
+</script>
+
+</body>
+</html>

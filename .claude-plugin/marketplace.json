@@ -1,0 +1,11 @@
+{
+  "name": "compound-business",
+  "owner": { "name": "Holon Research" },
+  "plugins": [
+    {
+      "name": "cb",
+      "source": "./",
+      "description": "Compound Business — business role skills with a memory that compounds. Chief, office-hours, brand, growth, content, community, partnerships, counsel, analyst, retro: every run reads the rules learned before it and writes back what it learned."
+    }
+  ]
+}

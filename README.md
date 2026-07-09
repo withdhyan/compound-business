@@ -17,11 +17,20 @@ roles execute (drafts → outbox/ → the human sends)
       ↺ next week starts smarter
 ```
 
+**Site:** [withdhyan.github.io/compound-business](https://withdhyan.github.io/compound-business/)
+
 ## Install
 
 CB is a Claude Code plugin (plain-markdown skills; portable in principle to other harnesses).
 
-1. Add this repo as a plugin (or copy `skills/` into your project's `.claude/skills/`).
+1. In Claude Code:
+
+   ```
+   /plugin marketplace add withdhyan/compound-business
+   /plugin install cb@compound-business
+   ```
+
+   (Or copy `skills/` into your project's `.claude/skills/`.)
 2. Run `/cb-init` in your project. It seeds the memory layer CB runs on:
    - `BUSINESS.md` — the live dashboard every role reads first and writes back to
    - `STRATEGY.md` — what you're building, for whom, your standing rules (CB reads it; you own it)
