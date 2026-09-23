@@ -29,6 +29,26 @@ test('inbox mode takes every real line; marker mode only marked lines', () => {
   assert.equal(normalizeStatement('A CLI, that mines!'), 'a cli that mines');
 });
 
+test('jsonl histories yield only user-authored text', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cb-mine-jsonl-'));
+  await fs.writeFile(path.join(root, 'history.jsonl'), [
+    JSON.stringify({ display: 'what if the miner read my codex history' }),
+    JSON.stringify({ session_id: 'x', ts: 1, text: 'a plain line without any marker' }),
+    JSON.stringify({ role: 'assistant', content: 'should we fake an idea here' }),
+    JSON.stringify({ type: 'user', content: [{ type: 'text', text: 'what if chat prompts became ideas' }] }),
+    'not json at all',
+  ].join('\n'));
+
+  const mined = await mineSources({
+    sources: [{ path: path.join(root, 'history.jsonl') }],
+  });
+  assert.deepEqual(mined.map((candidate) => candidate.statement), [
+    'the miner read my codex history',
+    'chat prompts became ideas',
+  ]);
+  assert.match(mined[0].source, /history\.jsonl:1$/);
+});
+
 test('mineSources walks dirs, dedupes, and respects ignore and limit', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cb-mine-'));
   await fs.mkdir(path.join(root, 'notes', 'sub'), { recursive: true });

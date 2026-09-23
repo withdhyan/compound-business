@@ -113,7 +113,9 @@ export async function mineIntoStore(store, options = {}) {
       statement: candidate.statement,
       source: candidate.source,
     }, () => new Date());
-    await store.writeRecord(idea);
+    if (!options.dryRun) {
+      await store.writeRecord(idea);
+    }
     created.push(idea);
   }
   return created;
@@ -290,6 +292,7 @@ async function main() {
     print(await mineIntoStore(store, {
       config: typeof flags.config === 'string' ? flags.config : undefined,
       limit: flags.limit ? Number(flags.limit) : undefined,
+      dryRun: flags['dry-run'] === true,
     }));
     return;
   }

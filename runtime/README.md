@@ -14,7 +14,7 @@ live outside, and every one of them passes this module's gates first.
 | `unit.mjs` | A business move is a unit: `planned → approved → running → review → shipped`, or `held` / `killed`. Review comes from a different role; irreversible units need a founder receipt |
 | `stage.mjs` | The 0→100 stage machine: each stage names its binding constraint and exit criteria; moves are +1 only; evidenced, not vibed |
 | `ladder.mjs` | Authority fails closed: advise → draft → reversible (live founder grant, budget hard stop) → irreversible (plus founder receipt). `authorizeAndSpend` persists the spend before anything executes |
-| `mine.mjs` | Read-only scan of configured history sources for candidate ideas (`inbox` and `marker` modes); never writes to a source, never judges |
+| `mine.mjs` | Read-only scan of configured history sources for candidate ideas (`inbox` and `marker` modes; `.md`/`.txt`/`.jsonl`, including chat histories — user-authored text only) |
 | `cli.mjs` | The creator loop's command surface: idea add/list/show/amplify/evaluate/decide/advance, and mine |
 | `kernel.mjs` / `safe-path.mjs` | The envelope and path guards; no host dependencies |
 

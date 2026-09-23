@@ -6,7 +6,11 @@ import path from 'node:path';
 // Two modes:
 //   inbox  — every non-empty line in the file is a candidate (for ideas.md,
 //            inbox.md, ideation.md, or any file the founder points at)
-//   marker — only lines carrying an idea marker (for notes, docs, journals)
+//   marker — only lines carrying an idea marker (for notes, docs, journals,
+//            and chat histories)
+// `.jsonl` files are read as user-authored text: history lines (`display`,
+// `text`, `prompt`) or user messages (`type`/`role: user`). Tool calls,
+// assistant turns, and malformed lines are skipped.
 // It never writes to a source, never reaches the network, and never judges —
 // evaluation is a separate pass. Statements are deduped against existing ideas
 // and within the batch.
@@ -26,11 +30,13 @@ const MARKERS = [
 ];
 
 const DEFAULT_IGNORE = ['.git', 'node_modules', 'data', '.DS_Store'];
+const DEFAULT_MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 export async function mineSources(options = {}) {
   const sources = Array.isArray(options.sources) ? options.sources : [];
   const ignore = new Set(options.ignore ?? DEFAULT_IGNORE);
   const limit = positiveLimit(options.limit);
+  const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const existing = new Set(
     (options.existingStatements ?? []).map(normalizeStatement),
   );
@@ -39,20 +45,25 @@ export async function mineSources(options = {}) {
 
   for (const source of sources) {
     const sourcePath = expandHome(source.path);
-    const files = await collectFiles(sourcePath, ignore);
+    const files = await collectFiles(sourcePath, ignore, maxFileBytes);
     for (const file of files) {
       const mode = source.mode ?? inferMode(file);
-      const text = await fs.readFile(file, 'utf8');
-      for (const extracted of extractCandidates(text, { mode })) {
-        const key = normalizeStatement(extracted.statement);
-        if (!key || existing.has(key) || seen.has(key)) continue;
-        seen.add(key);
-        candidates.push({
-          statement: extracted.statement,
-          source: `${file}:${extracted.line}`,
-        });
-        if (candidates.length >= limit) {
-          return candidates;
+      const isJsonl = file.endsWith('.jsonl');
+      const raw = await fs.readFile(file, 'utf8');
+      const lines = raw.split(/\r?\n/);
+      for (let index = 0; index < lines.length; index += 1) {
+        const text = isJsonl ? jsonlLineToText(lines[index]) : lines[index];
+        if (text === null) continue;
+        for (const embedded of text.split(/\r?\n/)) {
+          const statement = candidateFromLine(embedded, mode);
+          if (!statement) continue;
+          const key = normalizeStatement(statement);
+          if (!key || existing.has(key) || seen.has(key)) continue;
+          seen.add(key);
+          candidates.push({ statement, source: `${file}:${index + 1}` });
+          if (candidates.length >= limit) {
+            return candidates;
+          }
         }
       }
     }
@@ -66,11 +77,8 @@ export function extractCandidates(text, options = {}) {
   const out = [];
   const lines = String(text ?? '').split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
-    const raw = lines[index];
-    const cleaned = cleanStatement(raw, mode);
-    if (!cleaned) continue;
-    if (mode === 'marker' && !hasMarker(raw.toLowerCase())) continue;
-    out.push({ statement: cleaned, line: index + 1 });
+    const statement = candidateFromLine(lines[index], mode);
+    if (statement) out.push({ statement, line: index + 1 });
   }
   return out;
 }
@@ -82,8 +90,42 @@ export function normalizeStatement(value) {
     .trim();
 }
 
+function candidateFromLine(raw, mode) {
+  const cleaned = cleanStatement(raw, mode);
+  if (!cleaned) return null;
+  if (mode === 'marker' && !hasMarker(String(raw ?? '').toLowerCase())) return null;
+  return cleaned;
+}
+
 function hasMarker(lowered) {
   return MARKERS.some((marker) => lowered.includes(marker));
+}
+
+function jsonlLineToText(line) {
+  const trimmed = String(line ?? '').trim();
+  if (!trimmed) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (typeof parsed === 'string') return parsed;
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (typeof parsed.display === 'string') return parsed.display;
+  if (typeof parsed.text === 'string') return parsed.text;
+  if (typeof parsed.prompt === 'string') return parsed.prompt;
+  const role = parsed.role ?? parsed.type;
+  if (role !== 'user') return null;
+  const content = parsed.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const texts = content
+      .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+      .map((block) => block.text);
+    return texts.length > 0 ? texts.join('\n') : null;
+  }
+  return null;
 }
 
 function cleanStatement(raw, mode = 'marker') {
@@ -120,7 +162,7 @@ function expandHome(value) {
   return path.resolve(raw);
 }
 
-async function collectFiles(target, ignore) {
+async function collectFiles(target, ignore, maxFileBytes) {
   let stat;
   try {
     stat = await fs.stat(target);
@@ -138,9 +180,10 @@ async function collectFiles(target, ignore) {
     if (ignore.has(entry.name)) continue;
     const full = path.join(target, entry.name);
     if (entry.isDirectory()) {
-      files.push(...(await collectFiles(full, ignore)));
-    } else if (entry.isFile() && /\.(md|txt|mdx)$/i.test(entry.name)) {
-      files.push(full);
+      files.push(...(await collectFiles(full, ignore, maxFileBytes)));
+    } else if (entry.isFile() && /\.(md|txt|mdx|jsonl)$/i.test(entry.name)) {
+      const fileStat = await fs.stat(full);
+      if (fileStat.size <= maxFileBytes) files.push(full);
     }
   }
   return files;
