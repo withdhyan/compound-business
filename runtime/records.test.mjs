@@ -6,9 +6,11 @@ import {
   BUSINESS_STAGES,
   COMPANY_RECORD_KINDS,
   assertCompanyRecordShape,
+  assertIdeaTransition,
   buildAuditEntry,
   buildAuthorityGrant,
   buildBusinessDecision,
+  buildBusinessIdea,
   buildBusinessMetric,
   buildBusinessRule,
   buildBusinessStage,
@@ -43,6 +45,7 @@ test('the company record world is closed and prefixed', () => {
       'AuditEntry',
       'AuthorityGrant',
       'BusinessDecision',
+      'BusinessIdea',
       'BusinessMetric',
       'BusinessRule',
       'BusinessStage',
@@ -202,6 +205,79 @@ test('authority grants are founder-issued, time-limited, and never advisory', ()
     }, now),
     /expiresAt/,
   );
+});
+
+test('ideas carry the x100: variants, a verdict, and chosen picks', () => {
+  const idea = buildBusinessIdea({ statement: 'A CLI that mines my notes for ideas' }, now);
+  assert.equal(idea.status, 'seed');
+  assert.deepEqual(idea.variants, []);
+  assert.throws(() => buildBusinessIdea({ statement: '   ' }, now), /statement/);
+
+  const variant = (title) => ({
+    title,
+    angle: 'wedge',
+    oneLiner: 'one line',
+    firstBuild: 'a script',
+    why10x: 'compounds',
+  });
+  const amplified = buildBusinessIdea({
+    statement: 'A CLI that mines my notes for ideas',
+    status: 'amplified',
+    variants: [variant('Miner'), variant('Amplifier')],
+  }, now);
+  assert.equal(amplified.variants.length, 2);
+
+  assert.throws(
+    () => buildBusinessIdea({ statement: 'mine my notes', status: 'amplified' }, now),
+    /needs variants/,
+  );
+  assert.throws(
+    () => buildBusinessIdea({
+      statement: 'mine my notes',
+      status: 'amplified',
+      variants: [variant('Miner')],
+      chosenVariants: ['Nope'],
+    }, now),
+    /not in the amplification/,
+  );
+  assert.throws(
+    () => buildBusinessIdea({
+      statement: 'mine my notes',
+      status: 'decided',
+      variants: [variant('Miner')],
+    }, now),
+    /needs at least one chosen/,
+  );
+  assert.throws(
+    () => buildBusinessIdea({
+      statement: 'mine my notes',
+      variants: [variant('Miner')],
+      status: 'amplified',
+      evaluation: { verdict: 'maybe' },
+    }, now),
+    /invalid idea verdict/,
+  );
+  assert.throws(
+    () => buildBusinessIdea({
+      statement: 'mine my notes',
+      variants: [variant('Miner')],
+      status: 'amplified',
+      evaluation: { verdict: 'amplify', scores: { pull: 11 } },
+    }, now),
+    /0–10/,
+  );
+
+  const decided = buildBusinessIdea({
+    statement: 'A CLI that mines my notes for ideas',
+    status: 'decided',
+    variants: [variant('Miner')],
+    chosenVariants: ['Miner'],
+    evaluation: { verdict: 'amplify', scores: { pull: 7, fit: 9 } },
+  }, now);
+  assert.equal(decided.evaluation.verdict, 'amplify');
+
+  assert.equal(assertIdeaTransition('seed', 'amplified'), 'amplified');
+  assert.throws(() => assertIdeaTransition('seed', 'decided'), /idea transition refused/);
 });
 
 test('stage records need evidence, and audit outcomes are closed', () => {

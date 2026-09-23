@@ -7,6 +7,7 @@ import {
   requiredString,
 } from './kernel.mjs';
 import {
+  IDEA_TRANSITIONS,
   UNIT_TRANSITIONS,
   assertCompanyKind,
   assertCompanyRecordShape,
@@ -216,6 +217,17 @@ export class CompanyStore {
         throw new Error(`successor already exists: ${next.id}`);
       }
 
+      if (next.kind === 'BusinessIdea') {
+        if (next.statement !== predecessor.statement) {
+          throw new Error('an idea successor cannot change statement');
+        }
+        if (next.status !== predecessor.status) {
+          const allowed = IDEA_TRANSITIONS[predecessor.status] ?? [];
+          if (!allowed.includes(next.status)) {
+            throw new Error(`idea history refuses ${predecessor.status} → ${next.status}`);
+          }
+        }
+      }
       // Close first: a crash here leaves no live record (silence), never two.
       const closed = {
         ...predecessor,

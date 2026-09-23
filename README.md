@@ -53,6 +53,7 @@ CB is a Claude Code plugin (plain-markdown skills; portable in principle to othe
 | /counsel | Privacy/compliance review — binary SHIP / FIX verdicts; can block a feature |
 | /analyst | Metrics vs. pre-committed thresholds; measured ≠ estimated ≠ assumed, loudly |
 | /retro | The compounding ceremony: audit, extract, prune |
+| /amplify | One line in, a ranked ×100 portfolio out — evaluate, amplify, decide, build |
 | /new-role | CB grows itself — new roles via skill-TDD (baseline failure → write → pressure-test → deploy) |
 
 ## The runtime (engine under the roles)

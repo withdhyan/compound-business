@@ -17,6 +17,7 @@ export const COMPANY_RECORD_KINDS = Object.freeze([
   'BusinessMetric',
   'BusinessRule',
   'BusinessStage',
+  'BusinessIdea',
   'AuthorityGrant',
   'AuditEntry',
 ]);
@@ -29,6 +30,7 @@ const KIND_PREFIX = Object.freeze({
   BusinessMetric: 'bmet',
   BusinessRule: 'brule',
   BusinessStage: 'bstage',
+  BusinessIdea: 'bidea',
   AuthorityGrant: 'agrant',
   AuditEntry: 'audit',
 });
@@ -102,6 +104,37 @@ export const DECISION_SCOPES = Object.freeze([
 
 export const RULE_STATUSES = Object.freeze(['live', 'pruned']);
 
+// An idea is a seed the founder drops in; amplification develops it into
+// variants; a decision picks which variants become units. The x100 lives in
+// the variants list, the memory lives in the receipts around it.
+export const IDEA_STATUSES = Object.freeze([
+  'seed',
+  'amplified',
+  'decided',
+  'building',
+  'shipped',
+  'dropped',
+]);
+
+export const IDEA_TRANSITIONS = Object.freeze({
+  seed: Object.freeze(['amplified', 'dropped']),
+  amplified: Object.freeze(['decided', 'dropped']),
+  decided: Object.freeze(['building', 'dropped']),
+  building: Object.freeze(['shipped', 'dropped']),
+  shipped: Object.freeze([]),
+  dropped: Object.freeze([]),
+});
+
+export const IDEA_VERDICTS = Object.freeze(['amplify', 'park', 'kill']);
+
+export const IDEA_SCORE_KEYS = Object.freeze([
+  'pull',
+  'fit',
+  'novelty',
+  'feasibility',
+  'alignment',
+]);
+
 export const DEFAULT_PROVENANCE = Object.freeze({
   surface: 'company-runtime',
   lane: 'deliberate',
@@ -165,6 +198,53 @@ export function normalizeAuthorityClass(value) {
     throw new Error(`invalid authority class: ${actionClass}`);
   }
   return actionClass;
+}
+
+export function normalizeIdeaStatus(value) {
+  const status = requiredString(value, 'status').toLowerCase();
+  if (!IDEA_STATUSES.includes(status)) {
+    throw new Error(`invalid idea status: ${status}`);
+  }
+  return status;
+}
+
+export function assertIdeaTransition(from, to) {
+  const current = normalizeIdeaStatus(from);
+  const next = normalizeIdeaStatus(to);
+  const allowed = IDEA_TRANSITIONS[current] ?? [];
+  if (!allowed.includes(next)) {
+    throw new Error(`idea transition refused: ${current} → ${next}`);
+  }
+  return next;
+}
+
+export function normalizeIdeaEvaluation(value) {
+  if (value === undefined || value === null) return undefined;
+  if (!isPlainObject(value)) {
+    throw new Error('idea evaluation must be an object');
+  }
+  const verdict = requiredString(value.verdict, 'evaluation.verdict').toLowerCase();
+  if (!IDEA_VERDICTS.includes(verdict)) {
+    throw new Error(`invalid idea verdict: ${verdict}`);
+  }
+  const scores = value.scores ?? {};
+  if (!isPlainObject(scores)) {
+    throw new Error('evaluation.scores must be an object');
+  }
+  const normalizedScores = {};
+  for (const key of IDEA_SCORE_KEYS) {
+    const score = scores[key];
+    if (score === undefined) continue;
+    if (!(Number.isFinite(score) && score >= 0 && score <= 10)) {
+      throw new Error(`evaluation score ${key} must be 0–10`);
+    }
+    normalizedScores[key] = score;
+  }
+  return {
+    verdict,
+    scores: normalizedScores,
+    ...(optionalString(value.note) ? { note: optionalString(value.note) } : {}),
+  };
 }
 
 export function normalizeEvidenceClass(value) {
@@ -356,6 +436,41 @@ export function buildBusinessStage(input, now) {
   });
 }
 
+export function buildBusinessIdea(input, now) {
+  const value = requireInput(input, 'BusinessIdea');
+  const statement = requiredString(value.statement, 'statement');
+  const status = normalizeIdeaStatus(value.status ?? 'seed');
+  const variants = normalizeIdeaVariants(value.variants);
+  if (variants.length > 0 && status === 'seed') {
+    throw new Error('an idea with variants is at least amplified');
+  }
+  if (variants.length === 0 && status !== 'seed' && status !== 'dropped') {
+    throw new Error(`a ${status} idea needs variants`);
+  }
+  const chosenVariants = requireChosenVariants(value.chosenVariants, variants);
+  if (['decided', 'building', 'shipped'].includes(status) && chosenVariants.length === 0) {
+    throw new Error(`a ${status} idea needs at least one chosen variant`);
+  }
+  const body = {
+    statement,
+    ...(optionalString(value.source) ? { source: optionalString(value.source) } : {}),
+    status,
+    variants,
+    chosenVariants,
+    ...(optionalString(value.decisionNote) ? { decisionNote: optionalString(value.decisionNote) } : {}),
+    ...(normalizeIdeaEvaluation(value.evaluation)
+      ? { evaluation: normalizeIdeaEvaluation(value.evaluation) }
+      : {}),
+  };
+  return envelope({
+    kind: 'BusinessIdea',
+    dedupeKey: value.dedupeKey ?? businessKey('idea', statement),
+    value,
+    now,
+    body,
+  });
+}
+
 export function buildAuthorityGrant(input, now) {
   const value = requireInput(input, 'AuthorityGrant');
   const role = requiredString(value.role, 'role');
@@ -452,6 +567,44 @@ function requireEvidenceIds(value, label) {
     throw new Error(`${label} requires at least one id`);
   }
   return value.map((entry) => requiredString(entry, `${label} entry`));
+}
+
+function normalizeIdeaVariants(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new Error('idea variants must be an array');
+  }
+  return value.map((variant, index) => {
+    if (!isPlainObject(variant)) {
+      throw new Error(`variant ${index + 1} must be an object`);
+    }
+    const rank = variant.rank;
+    if (rank !== undefined && !(Number.isInteger(rank) && rank > 0)) {
+      throw new Error(`variant ${index + 1} rank must be a positive integer`);
+    }
+    return {
+      title: requiredString(variant.title, `variant ${index + 1} title`),
+      angle: requiredString(variant.angle, `variant ${index + 1} angle`),
+      oneLiner: requiredString(variant.oneLiner, `variant ${index + 1} oneLiner`),
+      firstBuild: requiredString(variant.firstBuild, `variant ${index + 1} firstBuild`),
+      why10x: requiredString(variant.why10x, `variant ${index + 1} why10x`),
+      ...(rank ? { rank } : {}),
+    };
+  });
+}
+
+function requireChosenVariants(value, variants) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string' || entry.trim() === '')) {
+    throw new Error('chosenVariants must be an array of variant titles');
+  }
+  const titles = new Set(variants.map((variant) => variant.title));
+  for (const title of value) {
+    if (!titles.has(title)) {
+      throw new Error(`chosen variant not in the amplification: ${title}`);
+    }
+  }
+  return [...value];
 }
 
 function assertRequired(value, label) {
@@ -600,6 +753,23 @@ function assertKindBody(record) {
     case 'BusinessStage': {
       normalizeBusinessStage(record.stage);
       requireEvidenceIds(record.evidenceIds, 'stage evidence');
+      break;
+    }
+    case 'BusinessIdea': {
+      requiredString(record.statement, 'statement');
+      const status = normalizeIdeaStatus(record.status);
+      const variants = normalizeIdeaVariants(record.variants);
+      if (variants.length > 0 && status === 'seed') {
+        throw new Error('an idea with variants is at least amplified');
+      }
+      if (variants.length === 0 && status !== 'seed' && status !== 'dropped') {
+        throw new Error(`a ${status} idea needs variants`);
+      }
+      const chosenVariants = requireChosenVariants(record.chosenVariants, variants);
+      if (['decided', 'building', 'shipped'].includes(status) && chosenVariants.length === 0) {
+        throw new Error(`a ${status} idea needs at least one chosen variant`);
+      }
+      normalizeIdeaEvaluation(record.evaluation);
       break;
     }
     case 'AuthorityGrant': {
