@@ -501,6 +501,7 @@ function measureBody(value) {
     prereg,
     threshold: requiredString(value.threshold, 'threshold'),
     population: requiredString(value.population, 'population'),
+    ...(optionalString(value.data) ? { data: optionalString(value.data) } : {}),
     reportable: value.signed && prereg !== null,
   };
 }
@@ -510,9 +511,10 @@ function measureBody(value) {
 // derived and re-checked on every write, so a record cannot claim it.
 export const RECEIPT_GATES = Object.freeze(['recipientAcceptance', 'paymentDate', 'signedScope']);
 
+
 export function buildBusinessReceipt(input, now) {
   const value = requireInput(input, 'BusinessReceipt');
-  const body = receiptBody(value);
+  const body = receiptBody(value, now);
   return envelope({
     kind: 'BusinessReceipt',
     dedupeKey: value.dedupeKey ?? businessKey('receipt', `${body.counterparty} ${body.what}`),
@@ -522,26 +524,39 @@ export function buildBusinessReceipt(input, now) {
   });
 }
 
-function receiptBody(value) {
+const ITEM_ID = /^mem_[0-9a-f]{16}$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
+
+// A gate is met only by evidence of the right shape: acceptance and signed
+// scope are memory item ids (the letter, the signed document, stored and
+// citable); the payment date is an ISO date that is not in the future.
+// Anything else is kept as written and simply does not count.
+export function receiptGateFormat(value) {
+  return {
+    recipientAcceptance: ITEM_ID.test(value.recipientAcceptance ?? ''),
+    signedScope: ITEM_ID.test(value.signedScope ?? ''),
+    paymentDate: ISO_DATE.test(value.paymentDate ?? '') && !Number.isNaN(Date.parse(value.paymentDate)),
+  };
+}
+
+function receiptBody(value, now = () => new Date()) {
   if (!Number.isFinite(value.amount) || value.amount < 0) {
     throw new Error('receipt amount must be a non-negative number');
   }
-  const paymentDate = optionalString(value.paymentDate) ?? null;
-  if (paymentDate !== null && Number.isNaN(Date.parse(paymentDate))) {
-    throw new Error('receipt paymentDate must be a date');
-  }
   const gates = {
     recipientAcceptance: optionalString(value.recipientAcceptance) ?? null,
-    paymentDate,
+    paymentDate: optionalString(value.paymentDate) ?? null,
     signedScope: optionalString(value.signedScope) ?? null,
   };
+  const ok = receiptGateFormat(gates);
+  const notFuture = ok.paymentDate && Date.parse(gates.paymentDate) <= now().getTime();
   return {
     counterparty: requiredString(value.counterparty, 'counterparty'),
     what: requiredString(value.what, 'what'),
     amount: value.amount,
     ...(optionalString(value.currency) ? { currency: optionalString(value.currency) } : {}),
     ...gates,
-    counted: RECEIPT_GATES.every((gate) => gates[gate] !== null),
+    counted: ok.recipientAcceptance && ok.signedScope && Boolean(notFuture),
   };
 }
 
@@ -856,13 +871,14 @@ function assertKindBody(record, policy) {
       break;
     }
     case 'BusinessReceipt': {
-      const body = receiptBody({
+      receiptBody({
         ...record,
         recipientAcceptance: record.recipientAcceptance ?? undefined,
         paymentDate: record.paymentDate ?? undefined,
         signedScope: record.signedScope ?? undefined,
       });
-      if (record.counted !== body.counted) {
+      const fmt = receiptGateFormat(record);
+      if (record.counted !== false && !(record.counted === true && fmt.recipientAcceptance && fmt.signedScope && fmt.paymentDate)) {
         throw new Error('receipt counted needs recipient acceptance, payment date and signed scope');
       }
       break;

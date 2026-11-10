@@ -139,7 +139,7 @@ test('digest is the pending batch as label, source, quote, change; founders only
   assert.match(edited.change, /replaces .*Growth rules/);
   const fresh = report.rows.find((row) => !row.supersedes);
   assert.match(fresh.change, /^new: New fact/);
-  assert.ok(fresh.quote.length <= 160);
+  assert.equal(fresh.quote.length, 400); // the founder sees the whole quote
 });
 
 // ---- CLI surface -----------------------------------------------------------
@@ -169,23 +169,45 @@ test('cli: propose carries supersedes, evidence, trust; digest and eval --record
   const ran = await cli(ctx, 'eval', [], { as: 'scribe', file: tasks, role: 'growth', record: true });
   assert.equal(ran.exitCode, 0);
   const trend = await cli(ctx, 'eval-trend', [], { as: 'cofounder' });
-  assert.equal(trend.value.series[0].key, 'growth');
+  assert.equal(trend.value.series[0].key, 'growth/scribe');
   assert.equal(trend.value.series[0].runs, 1);
 });
 
-test('cli: record add / update / list for receipts and measures', async () => {
-  const { ctx } = await setup();
+test('cli: record add / update / list for receipts, founder-only writes, label-filtered reads', async () => {
+  const { ctx, dataDir } = await setup();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cb-rec-'));
   const file = path.join(dir, 'r.json');
   await fs.writeFile(file, JSON.stringify({ counterparty: 'funder-a', what: 'grant', amount: 1000 }));
-  const added = await cli(ctx, 'record', ['add', 'receipt'], { file, label: 'founders' });
+  await assert.rejects(() => cli(ctx, 'record', ['add', 'receipt'], { as: 'scribe', file, label: 'founders' }), /only a founder/);
+  const added = await cli(ctx, 'record', ['add', 'receipt'], { as: 'founder', file, label: 'founders' });
   assert.equal(added.value.counted, false);
-  await fs.writeFile(file, JSON.stringify({ recipientAcceptance: 'email', paymentDate: '2026-12-01', signedScope: 'scope' }));
-  const updated = await cli(ctx, 'record', ['update', added.value.id], { file });
+  // acceptance and scope must be stored documents that resolve
+  const letter = await propose(ctx, 'cofounder', { label: 'founders', title: 'Acceptance letter', quote: 'we accept', source: 'letter' });
+  await approve(ctx, 'founder', [letter.id]);
+  await fs.writeFile(file, JSON.stringify({ recipientAcceptance: 'email', paymentDate: '2026-01-01', signedScope: letter.id }));
+  await assert.rejects(() => cli(ctx, 'record', ['update', added.value.id], { as: 'founder', file }), /memory item id/);
+  await fs.writeFile(file, JSON.stringify({ recipientAcceptance: letter.id, paymentDate: '2026-01-01', signedScope: letter.id }));
+  const updated = await cli(ctx, 'record', ['update', added.value.id], { as: 'founder', file });
   assert.equal(updated.value.counted, true);
-  const listed = await cli(ctx, 'record', ['list', 'receipt'], {});
+  await assert.rejects(() => cli(ctx, 'record', ['update', updated.value.id], { as: 'scribe', file }), /only a founder/);
+  const listed = await cli(ctx, 'record', ['list', 'receipt'], { as: 'founder' });
   assert.equal(listed.value.records.length, 1);
-  assert.equal(listed.value.totals.counted, 1000);
+  assert.deepEqual(listed.value.totals.counted, { unspecified: 1000 });
+  // a team agent sees nothing of a founders ledger; no principal is refused
+  assert.deepEqual((await cli(ctx, 'record', ['list', 'receipt'], { as: 'scribe' })).value.records, []);
+  await assert.rejects(() => cli(ctx, 'record', ['list', 'receipt'], {}), /--as/);
+  void dataDir;
+});
+
+test('cli: digest --out writes mode 600 and prints a count, never the text', async () => {
+  const { ctx, dataDir, role } = await setup();
+  await propose(ctx, 'scribe', edit(role, { quote: 'PRIVATE-QUOTE' }));
+  const out = path.join(dataDir, 'digest.txt');
+  const res = await cli(ctx, 'digest', [], { as: 'cofounder', out });
+  assert.equal(res.value.count, 1);
+  assert.ok(!JSON.stringify(res.value).includes('PRIVATE-QUOTE'));
+  assert.match(await fs.readFile(out, 'utf8'), /PRIVATE-QUOTE/);
+  assert.equal((await fs.stat(out)).mode & 0o777, 0o600);
 });
 
 test('a proposed body becomes the successor text and shows in the digest', async () => {

@@ -34,7 +34,7 @@ test('evalTrend shows week-0 against the latest run per role', async () => {
   await recordEval(c, report('scribe', 0.5), { at: '2026-11-10T09:00:00.000Z' });
   await assert.rejects(() => evalTrend(c, 'scribe'), /only a founder/);
   const { series } = await evalTrend(c, 'founder');
-  const growth = series.find((row) => row.key === 'growth');
+  const growth = series.find((row) => row.key === 'growth/scribe');
   assert.equal(growth.runs, 3);
   assert.equal(growth.first.recall, 0.4);
   assert.equal(growth.last.recall, 0.8);

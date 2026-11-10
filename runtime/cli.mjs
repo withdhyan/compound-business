@@ -3,9 +3,9 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { approve, digest, listPending, propose } from './curation.mjs';
+import { approve, digest, listPending, propose, reject } from './curation.mjs';
 import { evalTrend, recordEval } from './evals.mjs';
-import { addRecord, countedTotal, listLedger, updateRecord } from './ledger.mjs';
+import { addRecord, guardLedgerWrite, listLedgerFor, updateRecord } from './ledger.mjs';
 import { serve } from './mcp.mjs';
 import { buildIndex, citeCheck, getItems, runEval, showItem } from './memory.mjs';
 import { mineSources } from './mine.mjs';
@@ -39,10 +39,11 @@ import { createCompanyStore } from './store.mjs';
 //                      [--body <new text>] [--supersedes <id>] [--evidence <e>]... [--trust untrusted --founder-approved]
 //   node runtime/cli.mjs pending --as <founder>
 //   node runtime/cli.mjs approve --as <founder> <id>...
-//   node runtime/cli.mjs digest --as <founder>               (pending batch: label, source, quote, change)
+//   node runtime/cli.mjs digest --as <founder> [--out <file>] (pending batch, full text; --out writes mode 600, prints a count)
+//   node runtime/cli.mjs reject --as <founder> <id>... | --stale
 //   node runtime/cli.mjs eval --as <p> --file tasks.json [--min <recall>] [--role <r>] [--record]
-//   node runtime/cli.mjs eval-trend --as <founder> [--role <r>]
-//   node runtime/cli.mjs record add|update|list measure|receipt
+//   node runtime/cli.mjs eval-trend --as <founder> [--role <r>] [--out <file>]
+//   node runtime/cli.mjs record add|update|list measure|receipt --as <p>   (writes: founder only)
 //   node runtime/cli.mjs mcp --as <p>                         (stdio MCP, read-only)
 
 export async function addIdea(store, options) {
@@ -329,14 +330,20 @@ export async function executeMemoryCommand(group, rest, flags, ctx) {
       };
     case 'pending':
       return { value: await listPending(ctx, as()), exitCode: 0 };
-    case 'digest':
-      return { value: await digest(ctx, as()), exitCode: 0 };
+    case 'digest': {
+      const value = await digest(ctx, as());
+      return { value: await maybeWrite(value, flags, value.count), exitCode: 0 };
+    }
+    case 'reject':
+      return { value: await reject(ctx, as(), rest, { stale: flags.stale === true }), exitCode: 0 };
     case 'approve':
       return { value: await approve(ctx, as(), rest), exitCode: 0 };
-    case 'eval-trend':
-      return { value: await evalTrend(ctx, as(), { role: typeof flags.role === 'string' ? flags.role : undefined }), exitCode: 0 };
+    case 'eval-trend': {
+      const value = await evalTrend(ctx, as(), { role: typeof flags.role === 'string' ? flags.role : undefined });
+      return { value: await maybeWrite(value, flags, value.series.length), exitCode: 0 };
+    }
     case 'record':
-      return { value: await executeRecordCommand(rest, flags, ctx), exitCode: 0 };
+      return { value: await executeRecordCommand(rest, flags, ctx, as()), exitCode: 0 };
     case 'eval': {
       const tasks = await readJsonFile(flags.file, 'tasks');
       const report = await runEval(ctx, as(), Array.isArray(tasks) ? tasks : tasks.tasks);
@@ -349,17 +356,34 @@ export async function executeMemoryCommand(group, rest, flags, ctx) {
   }
 }
 
-// Ledger records (measures, receipts): trusted-operator writes, like `idea`.
-async function executeRecordCommand([verb, target], flags, ctx) {
+// Founder-level output goes to a file only the founder can read (mode 600);
+// stdout (and so any scheduler log) carries a count, never the text.
+async function maybeWrite(value, flags, count) {
+  if (typeof flags.out !== 'string') return value;
+  const file = path.resolve(flags.out);
+  await fs.writeFile(file, `${format(value)}\n`, { mode: 0o600 });
+  await fs.chmod(file, 0o600);
+  return { written: file, count };
+}
+
+// Ledger records (measures, receipts). Every command names a principal: reads
+// are label-filtered, writes are founder-only and cite evidence that resolves.
+// Agents do not write ledger records; they propose a memory item and a founder
+// applies it here.
+async function executeRecordCommand([verb, target], flags, ctx, principal) {
+  if (verb === 'list') return listLedgerFor(ctx, principal, target);
   if (verb === 'add') {
-    return addRecord(ctx.store, target, await readJsonFile(flags.file, 'record'), { label: flags.label });
+    const input = await readJsonFile(flags.file, 'record');
+    await guardLedgerWrite(ctx, principal, input);
+    return addRecord(ctx.store, target, input, { label: flags.label });
   }
-  if (verb === 'update') return updateRecord(ctx.store, target, await readJsonFile(flags.file, 'record'));
-  if (verb === 'list') {
-    const records = await listLedger(ctx.store, target);
-    return { kind: target, records, ...(target === 'receipt' ? { totals: countedTotal(records) } : {}) };
+  if (verb === 'update') {
+    const patch = await readJsonFile(flags.file, 'record');
+    await guardLedgerWrite(ctx, principal, patch);
+    await showItem(ctx, principal, target);
+    return updateRecord(ctx.store, target, patch);
   }
-  throw new Error('usage: record add <measure|receipt> --file f.json --label <l> | record update <id> --file f.json | record list <measure|receipt>');
+  throw new Error('usage: record add <measure|receipt> --as <founder> --file f.json --label <l> | record update <id> --as <founder> --file f.json | record list <measure|receipt> --as <p>');
 }
 
 async function readStdin() {
@@ -445,7 +469,7 @@ async function main() {
   }
 
   throw new Error(
-    'usage: cli.mjs [--data <dir>] idea add|list|show|amplify|evaluate|decide|advance | mine | index|get|show|cite-check|propose|pending|digest|approve|eval|eval-trend|mcp --as <principal> | record add|update|list <principal>',
+    'usage: cli.mjs [--data <dir>] idea add|list|show|amplify|evaluate|decide|advance | mine | index|get|show|cite-check|propose|pending|digest|reject|approve|eval|eval-trend|mcp --as <principal> | record add|update|list <principal>',
   );
 }
 
@@ -472,25 +496,29 @@ function formatMemory(value) {
     return [...lines, `recall ${value.recall.toFixed(3)} (${value.hits}/${value.expected})`].join('\n');
   }
   if (value.record) return `${value.id}  ${value.label}  ${value.path}\n${JSON.stringify(value.record, null, 2)}`;
+  if (value.written) return `${value.count} entries written to ${value.written} (mode 600)`;
+  if (value.rejected) return `rejected: ${value.rejected.join(' ') || '(none)'}`;
   if (value.rows && value.count !== undefined) {
     if (value.count === 0) return 'nothing pending';
     const lines = value.rows.map((r) => [
-      `${r.id}  ${r.label} · ${r.source} · "${r.quote}"${r.trust === 'untrusted' ? '  [UNTRUSTED, founder-vouched]' : ''}`,
+      `${r.id}  ${r.label} · ${r.source}${r.writeDown ? `  [WRITE-DOWN: proposer ${r.proposedBy} holds ${r.proposerGrant}]` : ''}${r.trust === 'untrusted' ? '  [UNTRUSTED, founder-vouched]' : ''}`,
+      `  quote: "${r.quote}"`,
       `  change: ${r.change}`,
+      ...(r.summary ? [`  summary: ${r.summary}`] : []),
+      ...(r.owner ? [`  owner: ${r.owner}`] : []),
       ...r.evidence.map((e) => `  evidence: ${e}`),
     ].join('\n'));
-    return [...lines, `approve: cb approve --as ${value.principal} <id>...`].join('\n');
+    return [...lines, `approve: cb approve --as ${value.principal} <id>...   reject: cb reject --as ${value.principal} <id>...`].join('\n');
   }
   if (value.series) {
-    const lines = value.series.map((r) => `${r.key.padEnd(14)} runs ${r.runs}  week-0 ${r.first.recall.toFixed(2)} -> now ${r.last.recall.toFixed(2)}  (${r.delta >= 0 ? '+' : ''}${r.delta.toFixed(2)})`);
+    const lines = value.series.map((r) => `${r.key.padEnd(24)} runs ${r.runs}  week-0 ${r.first.recall.toFixed(2)} -> now ${r.last.recall.toFixed(2)}  (${r.delta >= 0 ? '+' : ''}${r.delta.toFixed(2)})`);
     return lines.length ? lines.join('\n') : '(no eval history)';
   }
   if (value.records) {
     const lines = value.records.map((r) => `${r.id}  ${r.label ?? '-'}  ${r.instrument ?? r.counterparty}${r.counted !== undefined ? (r.counted ? '  COUNTED' : '  not counted') : r.reportable ? '  reportable' : '  not reportable'}`);
-    const t = value.totals ? [`counted ${value.totals.counted}  not counted ${value.totals.uncounted}`] : [];
+    const t = value.totals ? [`counted ${JSON.stringify(value.totals.counted)}  not counted ${JSON.stringify(value.totals.uncounted)}`] : [];
     return [...lines, ...t].join('\n') || '(none)';
   }
-  if (value.counterparty || value.instrument) return `${value.id}  ${value.label ?? '-'}  ${value.counterparty ?? value.instrument}`;
   if (value.approved) return `approved: ${value.approved.join(' ')}`;
   return null;
 }

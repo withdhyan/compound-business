@@ -123,15 +123,16 @@ cb propose --as scribe-bot --label team --title "..." --quote "founder's words" 
 cb propose --as scribe-bot --label team --title "Growth rules, wk 46" --supersedes mem_... \
    --body "<revised text>" --quote "..." --source "retro 2026-11-13" --evidence "eval recall 0.4 -> 0.6" --evidence mem_...
 cb pending --as cofounder               # founders only: label, source, quote
-cb digest --as cofounder                # pending approvals as one short batch: label, source, quote, change, evidence
+cb digest --as cofounder [--out f]      # pending approvals in full: label, source, quote, full change, summary, owner, evidence; WRITE-DOWN flagged. --out writes mode 600 and prints only a count
+cb reject --as cofounder <id>... | --stale   # drop pending entries (stale = older than 30 days; they also stop blocking edits)
 cb approve --as cofounder mem_...       # makes pending entries live
 cb eval --as guest-artist --file tasks.json [--min 0.8]   # [{"query": "...", "expect": ["id", ...]}]
 cb eval --as scribe-bot --file evals/growth.json --role growth --record   # also append to data/evals/history.jsonl
 cb eval-trend --as cofounder [--role growth]    # founders only: week-0 vs latest recall per role
-cb record add measure|receipt --file x.json --label founders   # measures registry, receipt gate
-cb record update <id> --file patch.json         # supersedes; keeps label; re-derives reportable/counted
-cb record list measure|receipt                  # receipts print counted vs not counted
-cb mcp --as guest-artist                   # stdio MCP: cb_get, cb_show, cb_cite_check (read-only)
+cb record add measure|receipt --as cofounder --file x.json --label founders   # founder only
+cb record update <id> --as cofounder --file patch.json   # founder only; supersedes; keeps label; re-derives reportable/counted
+cb record list measure|receipt --as <p>        # only records inside p's grant; receipts print counted vs not, per currency
+cb mcp --as guest-artist                   # stdio MCP: cb_get, cb_show, cb_cite_check, cb_propose (pending only)
 ```
 
 (`cb` is `node runtime/cli.mjs [--data <dir>]`.) Add `--json` for machine output.
@@ -152,11 +153,12 @@ cb mcp --as guest-artist                   # stdio MCP: cb_get, cb_show, cb_cite
 ### Compounding: edits, evidence, trend
 
 - **Edits supersede, never overwrite.** `propose --supersedes <id>` names a live memory file the proposer can read, at the same label (a label never changes). It stays pending until a founder approves. `approve` writes the successor under `approved/` with a `supersedes:` line; readers then see the old item as superseded, with the replacement. The old file is not touched and stays readable. Only `approved/` files can supersede; two claimants for one item apply neither (founders see a warning in `index`).
-- **One pending edit per item.** A second proposal against the same target is refused, so a retro folds its changes into one `--body`.
+- **One pending edit per item.** A second proposal against the same target is refused (the error does not name the rival), so a retro folds its changes into one `--body`. A founder's edit displaces a non-founder's pending one. `propose` and `approve` are serialized per data directory.
+- **The digest shows what will be written**, in full, and flags a `WRITE-DOWN` (proposer's grant above the item's label). Evidence ids above the item's label are redacted when approved. Approved untrusted items show `trust: untrusted` in `get`/`show`.
 - **Evidence.** `--evidence` (repeatable, at most 10) is free text or item ids. Cited ids must resolve in the proposer's own grant. It is kept on the pending entry, in `digest`, and under `Evidence:` in the approved file.
 - **Untrusted sources.** `--trust untrusted` is refused unless the proposer is a founder and passes `--founder-approved`. See `docs/injection.md`.
 - **Scorecards.** `eval --record` appends one aggregate line (time, principal, role, recall, hits, expected, task count; no query text) to `<data>/evals/history.jsonl`. `eval-trend` compares each role's first and latest run.
-- **Ledger records.** `BusinessMeasure` (instrument, partner, signed, prereg, threshold, population; `reportable` is derived: signed and preregistered) and `BusinessReceipt` (counterparty, what, amount, recipientAcceptance, paymentDate, signedScope; `counted` is derived: all three present). Both are labelled, retrievable with `cb get`, and corrected by supersession. Ids: `bmeas_...`, `brcpt_...`.
+- **Ledger records.** `BusinessMeasure` (instrument, partner, signed, prereg, threshold, population; `reportable` is derived: signed and preregistered) and `BusinessReceipt` (counterparty, what, amount, currency, recipientAcceptance, paymentDate, signedScope; `counted` is derived: acceptance and signed scope are memory item ids, the payment date is an ISO date not in the future). Totals are per currency. A reportable (or data-bearing) measure cannot change instrument, partner, prereg, threshold or population: a new design is a new measure. Both are labelled, retrievable with `cb get`, and corrected by supersession. Ids: `bmeas_...`, `brcpt_...`.
 
 Tests:
 

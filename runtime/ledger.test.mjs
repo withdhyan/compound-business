@@ -29,6 +29,8 @@ const measure = (overrides = {}) => ({
   ...overrides,
 });
 
+const DOC = 'mem_0123456789abcdef';
+const DOC2 = 'mem_fedcba9876543210';
 const receipt = (overrides = {}) => ({
   counterparty: 'funder-a',
   what: 'grant',
@@ -61,22 +63,25 @@ test('a measure is reportable only when signed and preregistered', () => {
 
 test('money counts only with recipient acceptance, payment date and signed scope', () => {
   assert.equal(buildBusinessReceipt(receipt(), now).counted, false);
-  const partial = { recipientAcceptance: 'email 2026-11-08', paymentDate: '2026-12-01' };
+  const partial = { recipientAcceptance: DOC, paymentDate: '2026-10-01' };
   assert.equal(buildBusinessReceipt(receipt(partial), now).counted, false);
-  const full = buildBusinessReceipt(receipt({ ...partial, signedScope: 'scope-v2.pdf' }), now);
+  const full = buildBusinessReceipt(receipt({ ...partial, signedScope: DOC2 }), now);
   assert.equal(full.counted, true);
   assert.match(full.id, /^brcpt_[0-9a-f]{24}$/);
   assert.throws(() => assertCompanyRecordShape({ ...buildBusinessReceipt(receipt(), now), counted: true }), /counted/);
   assert.throws(() => buildBusinessReceipt(receipt({ amount: -1 }), now), /amount/);
-  assert.throws(() => buildBusinessReceipt(receipt({ paymentDate: 'soon' }), now), /paymentDate/);
+  // free text, a bad date or a future date is kept but never counts
+  for (const bad of [{ recipientAcceptance: 'no', signedScope: 'pending', paymentDate: '2026-10-01' }, { recipientAcceptance: DOC, signedScope: DOC2, paymentDate: '1' }, { recipientAcceptance: DOC, signedScope: DOC2, paymentDate: '2099-01-01' }]) {
+    assert.equal(buildBusinessReceipt(receipt(bad), now).counted, false);
+  }
 });
 
 test('countedTotal separates counted money from promised money', () => {
-  const a = buildBusinessReceipt(receipt({ counterparty: 'a', recipientAcceptance: 'x', paymentDate: '2026-12-01', signedScope: 's' }), now);
+  const a = buildBusinessReceipt(receipt({ counterparty: 'a', recipientAcceptance: DOC, paymentDate: '2026-10-01', signedScope: DOC2 }), now);
   const b = buildBusinessReceipt(receipt({ counterparty: 'b', amount: 20000 }), now);
   const total = countedTotal([a, b]);
-  assert.equal(total.counted, 50000);
-  assert.equal(total.uncounted, 20000);
+  assert.deepEqual(total.counted, { USD: 50000 });
+  assert.deepEqual(total.uncounted, { USD: 20000 });
   assert.deepEqual(total.missing.map((row) => [row.counterparty, row.lacks]), [['b', ['recipientAcceptance', 'paymentDate', 'signedScope']]]);
 });
 
@@ -85,7 +90,7 @@ test('ledger add, list and update supersede, keep the label, and are readable vi
   const first = await addRecord(store, 'receipt', receipt(), { label: 'founders' });
   assert.equal(first.label, 'founders');
   await assert.rejects(() => addRecord(store, 'receipt', receipt()), /label is required/);
-  const second = await updateRecord(store, first.id, { recipientAcceptance: 'email 2026-11-08', paymentDate: '2026-12-01', signedScope: 'scope.pdf' });
+  const second = await updateRecord(store, first.id, { recipientAcceptance: DOC, paymentDate: '2026-10-01', signedScope: DOC2 });
   assert.equal(second.counted, true);
   assert.equal(second.label, 'founders');
   assert.equal(second.amount, 50000);

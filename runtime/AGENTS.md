@@ -57,6 +57,13 @@ decisions, metrics, rules, stage, authority. Nothing here reaches the network.
 - `reportable` (measures) and `counted` (receipts) are derived and re-checked
   on every write; a record cannot claim them. Money is counted only with
   recipient acceptance, payment date and signed scope.
+- Ledger reads name a principal and are label-filtered; ledger writes are
+  founder-only and cite evidence that resolves. A reportable or data-bearing
+  measure cannot change its design. `cb_propose` (MCP) is bound to the launch
+  principal and carries no trust or approval inputs.
+- `supersedes:` is honoured from any file under an `approved/` memory
+  directory; whoever can write files there can retire an item. File access is
+  outside the trust model.
 - Trust model: labels are a retrieval filter, not an OS boundary. They hold
   only when agents reach memory through the MCP server (`cb mcp --as <p>`),
   with the principal fixed in the harness config, and run as an OS user with

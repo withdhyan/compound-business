@@ -55,8 +55,10 @@ export async function evalTrend(ctx, principal, options = {}) {
       skipped += 1;
       continue;
     }
-    const key = row.role ?? row.principal;
-    if (options.role && key !== options.role) continue;
+    // Like for like: a series is one role run by one principal. A grant change
+    // starts a new series instead of faking a delta.
+    const key = row.role ? `${row.role}/${row.principal}` : row.principal;
+    if (options.role && row.role !== options.role) continue;
     groups.set(key, [...(groups.get(key) ?? []), row]);
   }
   const series = [...groups].map(([key, rows]) => {
@@ -64,7 +66,7 @@ export async function evalTrend(ctx, principal, options = {}) {
     const point = (row) => ({ at: row.at, recall: row.recall });
     const first = rows[0];
     const last = rows[rows.length - 1];
-    return { key, runs: rows.length, first: point(first), last: point(last), delta: last.recall - first.recall };
+    return { key, role: rows[0].role ?? null, principal: rows[0].principal, runs: rows.length, first: point(first), last: point(last), delta: last.recall - first.recall };
   });
   series.sort((a, b) => a.key.localeCompare(b.key));
   return { principal, series, skipped };
