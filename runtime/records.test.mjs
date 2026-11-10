@@ -374,3 +374,65 @@ test('the store-side shape check refuses hand-built records that skip builder la
     /does not belong to kind/,
   );
 });
+
+// ---- labels and founder principals ----------------------------------------
+
+import { buildPolicy } from './policy.mjs';
+import { isGrantLive } from './records.mjs';
+
+const multiPolicy = buildPolicy({
+  owner: 'founder',
+  founders: ['founder', 'cofounder'],
+  principals: { founder: 'personal', cofounder: 'founders' },
+});
+
+function ruleBody(overrides = {}) {
+  return { role: 'content', statement: 'No Friday posts', rationale: 'r', receiptId: 'audit_1', ...overrides };
+}
+
+test('records carry an optional label that is validated and persisted', () => {
+  const rule = buildBusinessRule(ruleBody({ label: 'Team' }), now);
+  assert.equal(rule.label, 'team');
+  assert.equal(assertCompanyRecordShape(rule).label, 'team');
+  assert.equal('label' in buildBusinessRule(ruleBody(), now), false);
+  assert.throws(() => buildBusinessRule(ruleBody({ label: 'secret' }), now), /invalid label/);
+  assert.throws(
+    () => assertCompanyRecordShape({ ...buildBusinessRule(ruleBody(), now), label: 'secret' }),
+    /invalid label/,
+  );
+});
+
+test('a second founder can grant authority and decide levers under a policy', () => {
+  const grantInput = {
+    role: 'money', scope: 'ap:pay', actionClass: 'reversible', budget: 10,
+    expiresAt: '2026-12-01T00:00:00.000Z', grantedBy: 'cofounder',
+  };
+  assert.throws(() => buildAuthorityGrant(grantInput, now), /only the founder grants authority/);
+  const grant = buildAuthorityGrant(grantInput, now, multiPolicy);
+  assert.equal(grant.grantedBy, 'cofounder');
+  assert.throws(() => assertCompanyRecordShape(grant), /only the founder grants authority/);
+  assertCompanyRecordShape(grant, multiPolicy);
+  assert.equal(isGrantLive(grant, '2026-09-23T00:00:00.000Z'), false);
+  assert.equal(isGrantLive(grant, '2026-09-23T00:00:00.000Z', multiPolicy), true);
+  assert.throws(
+    () => buildAuthorityGrant({ ...grantInput, grantedBy: 'guest-artist' }, now, multiPolicy),
+    /only the founder grants authority/,
+  );
+
+  const lever = {
+    type: 'lever', scope: 'capital', statement: 'Raise from Acme', rationale: 'r',
+    status: 'decided', decidedBy: 'cofounder',
+  };
+  assert.throws(() => buildBusinessDecision(lever, now), /decided by the founder/);
+  assertCompanyRecordShape(buildBusinessDecision(lever, now, multiPolicy), multiPolicy);
+});
+
+test('stage names come from the policy ladder when one is configured', () => {
+  const policy = buildPolicy({
+    owner: 'f', founders: ['f'], principals: { f: 'personal' },
+    stages: [{ name: 'measures', bindingConstraint: 'x', exitCriteria: ['c'] }],
+  });
+  assert.throws(() => buildBusinessStage({ stage: 'measures', evidenceIds: ['bmet_1'] }, now), /invalid business stage/);
+  assert.equal(buildBusinessStage({ stage: 'measures', evidenceIds: ['bmet_1'] }, now, policy).stage, 'measures');
+  assert.throws(() => buildBusinessStage({ stage: 'pmf', evidenceIds: ['bmet_1'] }, now, policy), /invalid business stage/);
+});

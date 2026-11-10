@@ -369,3 +369,38 @@ test('authorizeAndSpend persists the spend and hard-stops the budget', async () 
   assert.match(second.audit.reason, /budget hard stop/);
   assert.equal((await store.readRecord(first.grantId)).spent, 60);
 });
+
+// ---- founder principals ----------------------------------------------------
+
+import { buildPolicy } from './policy.mjs';
+
+const twoFounders = buildPolicy({
+  owner: 'founder', founders: ['founder', 'cofounder'],
+  principals: { founder: 'personal', cofounder: 'founders' },
+});
+
+test('a second founder\'s grant authorizes only under a policy that lists them', () => {
+  const cofounderGrant = buildAuthorityGrant({
+    role: 'money', scope: 'ap:pay', actionClass: 'reversible', budget: 50,
+    expiresAt: '2026-10-22T00:00:00.000Z', grantedBy: 'cofounder',
+  }, now, twoFounders);
+  const input = { actionClass: 'reversible', actor: 'money', action: 'pay', scope: 'ap:pay', at, grants: [cofounderGrant] };
+  assert.equal(authorizeAction(input).allowed, false);
+  assert.equal(authorizeAction({ ...input, policy: twoFounders }).allowed, true);
+});
+
+test('spending keeps the granting founder on the successor grant', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cb-ladder-'));
+  const store = createCompanyStore({ dataDir, policy: twoFounders });
+  const cofounderGrant = buildAuthorityGrant({
+    role: 'money', scope: 'ap:pay', actionClass: 'reversible', budget: 50,
+    expiresAt: '2026-10-22T00:00:00.000Z', grantedBy: 'cofounder',
+  }, now, twoFounders);
+  await store.writeRecord(cofounderGrant);
+  const result = await authorizeAndSpend({
+    store, grantIds: [cofounderGrant.id], actionClass: 'reversible', actor: 'money',
+    action: 'pay', scope: 'ap:pay', cost: 10, at: '2026-09-22T10:05:00.000Z',
+  });
+  assert.equal(result.allowed, true);
+  assert.equal((await store.readRecord(result.grantId)).grantedBy, 'cofounder');
+});

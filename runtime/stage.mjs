@@ -2,6 +2,7 @@ import {
   isPlainObject,
   requiredString,
 } from './kernel.mjs';
+import { DEFAULT_POLICY, isFounderPrincipal } from './policy.mjs';
 import {
   BUSINESS_STAGES,
   normalizeBusinessStage,
@@ -79,23 +80,33 @@ export const STAGE_CATALOG = Object.freeze({
   }),
 });
 
-export function stageIndex(stage) {
-  return STAGE_CATALOG[normalizeBusinessStage(stage)].index;
+// The ladder in force: the policy's configured stages, else the revenue ladder.
+export function ladderFor(policy = DEFAULT_POLICY) {
+  if (!policy.stages) return { names: BUSINESS_STAGES, catalog: STAGE_CATALOG };
+  return {
+    names: policy.stageNames,
+    catalog: Object.fromEntries(policy.stages.map((stage) => [stage.name, stage])),
+  };
 }
 
-export function nextStage(stage) {
-  const index = stageIndex(stage);
-  return BUSINESS_STAGES[index + 1] ?? null;
+export function stageIndex(stage, policy = DEFAULT_POLICY) {
+  return ladderFor(policy).catalog[normalizeBusinessStage(stage, policy)].index;
+}
+
+export function nextStage(stage, policy = DEFAULT_POLICY) {
+  const index = stageIndex(stage, policy);
+  return ladderFor(policy).names[index + 1] ?? null;
 }
 
 export function assessStageMove(input) {
   if (!isPlainObject(input)) {
     throw new Error('stage move input must be a plain object');
   }
-  const from = normalizeBusinessStage(requiredString(input.from, 'from'));
-  const to = normalizeBusinessStage(requiredString(input.to, 'to'));
-  const fromIndex = stageIndex(from);
-  const toIndex = stageIndex(to);
+  const policy = input.policy ?? DEFAULT_POLICY;
+  const from = normalizeBusinessStage(requiredString(input.from, 'from'), policy);
+  const to = normalizeBusinessStage(requiredString(input.to, 'to'), policy);
+  const fromIndex = stageIndex(from, policy);
+  const toIndex = stageIndex(to, policy);
   const refusals = [];
 
   if (toIndex === fromIndex) {
@@ -108,7 +119,7 @@ export function assessStageMove(input) {
 
   if (toIndex < fromIndex) {
     const lever = isPlainObject(input.decision) ? input.decision : null;
-    if (!lever || lever.type !== 'lever' || lever.decidedBy !== 'founder') {
+    if (!lever || lever.type !== 'lever' || !isFounderPrincipal(lever.decidedBy, policy)) {
       return decision(from, to, ['a backward move needs a founder lever'], []);
     }
     return decision(from, to, [], [], {
@@ -129,7 +140,7 @@ export function assessStageMove(input) {
     covered.get(criterion).push({ recordId, evidenceClass });
   }
 
-  for (const criterion of STAGE_CATALOG[from].exitCriteria) {
+  for (const criterion of ladderFor(policy).catalog[from].exitCriteria) {
     const entries = covered.get(criterion) ?? [];
     if (entries.length === 0) {
       refusals.push(`missing evidence for ${criterion}`);

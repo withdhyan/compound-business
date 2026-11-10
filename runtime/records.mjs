@@ -7,6 +7,7 @@ import {
   optionalString,
   requiredString,
 } from './kernel.mjs';
+import { DEFAULT_POLICY, isFounderPrincipal, normalizeLabel } from './policy.mjs';
 
 // The company runtime's closed record world. These kinds never enter the
 // personal substrate: business state is a separate surface with its own store
@@ -176,9 +177,9 @@ export function assertCompanyKind(kind) {
   }
 }
 
-export function normalizeBusinessStage(value) {
+export function normalizeBusinessStage(value, policy = DEFAULT_POLICY) {
   const stage = requiredString(value, 'stage').toLowerCase();
-  if (!BUSINESS_STAGES.includes(stage)) {
+  if (!(policy.stageNames ?? BUSINESS_STAGES).includes(stage)) {
     throw new Error(`invalid business stage: ${stage}`);
   }
   return stage;
@@ -258,10 +259,10 @@ export function normalizeEvidenceClass(value) {
 // Grant liveness is shared by the ladder and the store: a live grant is a
 // founder-issued, unrevoked, unexpired, un-superseded record whose validFrom
 // has arrived. Non-finite spend or budget fails closed.
-export function isGrantLive(grant, at) {
+export function isGrantLive(grant, at, policy = DEFAULT_POLICY) {
   if (!isPlainObject(grant) || grant.kind !== 'AuthorityGrant') return false;
   if (typeof grant.id !== 'string' || grant.id.trim() === '') return false;
-  if (grant.grantedBy !== 'founder') return false;
+  if (!isFounderPrincipal(grant.grantedBy, policy)) return false;
   if (grant.revokedAt) return false;
   if (grant.validTo || grant.supersededById) return false;
   if (grant.spent !== undefined && !(Number.isFinite(grant.spent) && grant.spent >= 0)) return false;
@@ -281,9 +282,9 @@ export function remainingBudget(grant) {
   return Number.isFinite(remaining) ? Math.max(0, remaining) : null;
 }
 
-export function buildBusinessUnit(input, now) {
+export function buildBusinessUnit(input, now, policy = DEFAULT_POLICY) {
   const value = requireInput(input, 'BusinessUnit');
-  const stage = normalizeBusinessStage(value.stage);
+  const stage = normalizeBusinessStage(value.stage, policy);
   const authorityClass = normalizeAuthorityClass(value.authorityClass);
   const ownerRole = requiredString(value.ownerRole, 'ownerRole');
   const reviewRole = requiredString(value.reviewRole, 'reviewRole');
@@ -324,7 +325,7 @@ export function buildBusinessUnit(input, now) {
   return envelope({ kind: 'BusinessUnit', dedupeKey, value, now, body });
 }
 
-export function buildBusinessDecision(input, now) {
+export function buildBusinessDecision(input, now, policy = DEFAULT_POLICY) {
   const value = requireInput(input, 'BusinessDecision');
   const type = requiredString(value.type, 'type').toLowerCase();
   if (!DECISION_TYPES.includes(type)) {
@@ -341,7 +342,7 @@ export function buildBusinessDecision(input, now) {
   const statement = requiredString(value.statement, 'statement');
   const decidedBy = optionalString(value.decidedBy);
   if (status === 'decided') {
-    if (type === 'lever' && decidedBy !== 'founder') {
+    if (type === 'lever' && !isFounderPrincipal(decidedBy, policy)) {
       throw new Error('a decided lever must be decided by the founder');
     }
     if (!decidedBy) {
@@ -421,10 +422,10 @@ export function buildBusinessRule(input, now) {
   });
 }
 
-export function buildBusinessStage(input, now) {
+export function buildBusinessStage(input, now, policy = DEFAULT_POLICY) {
   const value = requireInput(input, 'BusinessStage');
   const body = {
-    stage: normalizeBusinessStage(value.stage),
+    stage: normalizeBusinessStage(value.stage, policy),
     evidenceIds: requireEvidenceIds(value.evidenceIds, 'stage evidence'),
   };
   return envelope({
@@ -471,7 +472,7 @@ export function buildBusinessIdea(input, now) {
   });
 }
 
-export function buildAuthorityGrant(input, now) {
+export function buildAuthorityGrant(input, now, policy = DEFAULT_POLICY) {
   const value = requireInput(input, 'AuthorityGrant');
   const role = requiredString(value.role, 'role');
   const scope = requiredString(value.scope, 'scope');
@@ -487,7 +488,7 @@ export function buildAuthorityGrant(input, now) {
   if (Number.isNaN(Date.parse(expiresAt))) {
     throw new Error('grant expiresAt must be an ISO timestamp');
   }
-  if (value.grantedBy !== 'founder') {
+  if (!isFounderPrincipal(value.grantedBy, policy)) {
     throw new Error('only the founder grants authority');
   }
   const body = {
@@ -496,7 +497,7 @@ export function buildAuthorityGrant(input, now) {
     actionClass,
     budget: budget ?? null,
     spent: nonNegativeNumber(value.spent ?? 0, 'spent'),
-    grantedBy: 'founder',
+    grantedBy: value.grantedBy,
     expiresAt,
     revokedAt: null,
   };
@@ -550,6 +551,7 @@ function envelope({ kind, dedupeKey, value, now, body }) {
     ingestedAt: temporal.ingestedAt,
     supersededById: null,
     provenance: normalizeProvenance(value.provenance ?? DEFAULT_PROVENANCE),
+    ...(optionalString(value.label) ? { label: normalizeLabel(value.label) } : {}),
     ...(predecessorId ? { supersedes: predecessorId } : {}),
     ...body,
   };
@@ -623,7 +625,7 @@ function nonNegativeNumber(value, label) {
 // Full shape check for anything about to be persisted. The builders are the
 // supported constructors; this is the store-side backstop so a hand-built
 // record cannot smuggle in a state, grant, or metric the builders refuse.
-export function assertCompanyRecordShape(record) {
+export function assertCompanyRecordShape(record, policy = DEFAULT_POLICY) {
   if (!isPlainObject(record)) {
     throw new Error('company record must be a plain object');
   }
@@ -661,15 +663,16 @@ export function assertCompanyRecordShape(record) {
       throw new Error('record.supersededById must name a record of the same kind');
     }
   }
-  assertKindBody(record);
+  if (record.label !== undefined) normalizeLabel(record.label);
+  assertKindBody(record, policy);
   return record;
 }
 
-function assertKindBody(record) {
+function assertKindBody(record, policy) {
   switch (record.kind) {
     case 'BusinessUnit': {
       requiredString(record.title, 'title');
-      normalizeBusinessStage(record.stage);
+      normalizeBusinessStage(record.stage, policy);
       requiredString(record.goal, 'goal');
       requireEvidenceIds(record.evidence, 'unit evidence');
       requiredString(record.verification, 'verification');
@@ -724,7 +727,7 @@ function assertKindBody(record) {
       if (!['open', 'decided'].includes(status)) throw new Error(`invalid decision status: ${status}`);
       if (status === 'decided') {
         const decidedBy = requiredString(record.decidedBy, 'decidedBy');
-        if (type === 'lever' && decidedBy !== 'founder') {
+        if (type === 'lever' && !isFounderPrincipal(decidedBy, policy)) {
           throw new Error('a decided lever must be decided by the founder');
         }
       }
@@ -751,7 +754,7 @@ function assertKindBody(record) {
       break;
     }
     case 'BusinessStage': {
-      normalizeBusinessStage(record.stage);
+      normalizeBusinessStage(record.stage, policy);
       requireEvidenceIds(record.evidenceIds, 'stage evidence');
       break;
     }
@@ -785,7 +788,7 @@ function assertKindBody(record) {
       if (!(Number.isFinite(record.spent) && record.spent >= 0)) {
         throw new Error('grant spent must be a non-negative number');
       }
-      if (record.grantedBy !== 'founder') throw new Error('only the founder grants authority');
+      if (!isFounderPrincipal(record.grantedBy, policy)) throw new Error('only the founder grants authority');
       requiredString(record.expiresAt, 'expiresAt');
       if (Number.isNaN(Date.parse(record.expiresAt))) {
         throw new Error('grant expiresAt must be an ISO timestamp');

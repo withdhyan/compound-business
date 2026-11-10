@@ -109,3 +109,44 @@ test('planStageAdvance only produces a proposal when the move is allowed', () =>
     /stage advance refused/,
   );
 });
+
+// ---- configurable ladder ---------------------------------------------------
+
+import { buildPolicy } from './policy.mjs';
+
+const researchPolicy = buildPolicy({
+  owner: 'f', founders: ['f', 'g'], principals: { f: 'personal', g: 'founders' },
+  stages: [
+    { name: 'measures', bindingConstraint: 'a signed partner', exitCriteria: ['partner_signed', 'protocol_agreed'] },
+    { name: 'k_loop', bindingConstraint: 'a measured loop', exitCriteria: ['loop_metric'] },
+    { name: 'community', bindingConstraint: 'ten people', exitCriteria: ['cohort_formed'] },
+  ],
+});
+
+test('a policy ladder replaces the revenue ladder', () => {
+  assert.equal(stageIndex('k_loop', researchPolicy), 1);
+  assert.equal(nextStage('measures', researchPolicy), 'k_loop');
+  assert.equal(nextStage('community', researchPolicy), null);
+  assert.throws(() => stageIndex('pmf', researchPolicy), /invalid business stage/);
+  assert.equal(stageIndex('pmf'), 3);
+});
+
+test('moves on a policy ladder need that ladder\'s criteria and stay +1 only', () => {
+  const move = (extra) => assessStageMove({ from: 'measures', to: 'k_loop', policy: researchPolicy, ...extra });
+  const refused = move({ evidence: [evidence('partner_signed')] });
+  assert.equal(refused.allowed, false);
+  assert.deepEqual([...refused.refusals], ['missing evidence for protocol_agreed']);
+  assert.equal(move({ evidence: [evidence('partner_signed'), evidence('protocol_agreed')] }).allowed, true);
+  assert.equal(
+    assessStageMove({ from: 'measures', to: 'community', policy: researchPolicy }).refusals[0],
+    'cannot skip a stage',
+  );
+  assert.throws(() => assessStageMove({ from: 'idea', to: 'validation', policy: researchPolicy }), /invalid business stage/);
+});
+
+test('any listed founder may issue the backward lever', () => {
+  const lever = { type: 'lever', decidedBy: 'g', statement: 'regroup' };
+  const backward = { from: 'k_loop', to: 'measures', decision: lever };
+  assert.equal(assessStageMove({ ...backward, policy: researchPolicy }).allowed, true);
+  assert.equal(assessStageMove({ ...backward, policy: researchPolicy, decision: { ...lever, decidedBy: 'guest-artist' } }).allowed, false);
+});

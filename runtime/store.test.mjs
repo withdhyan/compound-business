@@ -422,3 +422,53 @@ test('two stores via symlinked aliases of one dataDir serialize', async () => {
   assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
   assert.equal((await a.liveRecords('BusinessRule')).length, 1);
 });
+
+// ---- labels and policy -----------------------------------------------------
+
+import { buildPolicy } from './policy.mjs';
+
+const storePolicy = buildPolicy({
+  owner: 'founder', founders: ['founder', 'cofounder'],
+  principals: { founder: 'personal', cofounder: 'founders' },
+});
+
+test('a store with a founder list accepts a second founder\'s grant; the default store does not', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'company-store-'));
+  const grant = buildAuthorityGrant({
+    role: 'money', scope: 'ap:pay', actionClass: 'reversible', budget: 5,
+    expiresAt: '2026-12-01T00:00:00.000Z', grantedBy: 'cofounder',
+  }, fixedNow, storePolicy);
+  await assert.rejects(() => createCompanyStore({ dataDir }).writeRecord(grant), /only the founder grants authority/);
+  await createCompanyStore({ dataDir, policy: storePolicy }).writeRecord(grant);
+});
+
+test('a label cannot be changed once set, so supersession cannot launder access', async () => {
+  const { store } = await tempStore();
+  const first = buildBusinessRule(ruleInput({ label: 'founders' }), fixedNow);
+  await store.writeRecord(first);
+  const later = () => new Date('2026-09-23T10:00:00.000Z');
+  const relabelled = buildBusinessRule(
+    ruleInput({ label: 'public', supersedes: first.id, dedupeKey: first.dedupeKey }), later,
+  );
+  await assert.rejects(() => store.supersedeRecord(first.id, relabelled), /cannot change label/);
+  const dropped = buildBusinessRule(
+    ruleInput({ supersedes: first.id, dedupeKey: first.dedupeKey }), later,
+  );
+  await assert.rejects(() => store.supersedeRecord(first.id, dropped), /cannot change label/);
+  const kept = buildBusinessRule(
+    ruleInput({ label: 'founders', supersedes: first.id, dedupeKey: first.dedupeKey }), later,
+  );
+  await store.supersedeRecord(first.id, kept);
+});
+
+test('a legacy unlabelled record may be labelled by its successor', async () => {
+  const { store } = await tempStore();
+  const first = buildBusinessRule(ruleInput(), fixedNow);
+  await store.writeRecord(first);
+  const labelled = buildBusinessRule(
+    ruleInput({ label: 'team', supersedes: first.id, dedupeKey: first.dedupeKey }),
+    () => new Date('2026-09-23T10:00:00.000Z'),
+  );
+  const { successor } = await store.supersedeRecord(first.id, labelled);
+  assert.equal(successor.label, 'team');
+});

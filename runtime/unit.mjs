@@ -99,7 +99,7 @@ export async function transitionUnit(unit, nextState, context = {}, now) {
     ...(approvedBy ? { approvedBy } : {}),
     ...(context.notes ? { notes: context.notes } : {}),
     ...(context.reason ? { reason: context.reason } : {}),
-  }, clock);
+  }, clock, context.store?.policy);
 
   return Object.freeze({
     successor,

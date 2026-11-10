@@ -6,6 +6,7 @@ import {
   isPlainObject,
   requiredString,
 } from './kernel.mjs';
+import { DEFAULT_POLICY } from './policy.mjs';
 import {
   IDEA_TRANSITIONS,
   UNIT_TRANSITIONS,
@@ -63,11 +64,12 @@ export class CompanyStore {
       throw new Error('CompanyStore options must be a plain object');
     }
     this.dataDir = path.resolve(options.dataDir ?? path.join(process.cwd(), 'data'));
+    this.policy = options.policy ?? DEFAULT_POLICY;
   }
 
   async writeRecord(record) {
     return serializeByDataDir(this.dataDir, async () => {
-      const value = assertCompanyRecordShape(record);
+      const value = assertCompanyRecordShape(record, this.policy);
       if (value.supersedes) {
         throw new Error('successors go through supersedeRecord');
       }
@@ -140,7 +142,7 @@ export class CompanyStore {
       if (!isLiveRecord(predecessor)) {
         throw new Error(`company record is not live: ${predecessorId}`);
       }
-      const next = assertCompanyRecordShape(successor);
+      const next = assertCompanyRecordShape(successor, this.policy);
       if (next.kind !== predecessor.kind) {
         throw new Error('a successor must keep the predecessor kind');
       }
@@ -158,6 +160,11 @@ export class CompanyStore {
       }
       if (Date.parse(next.validFrom) <= Date.parse(predecessor.validFrom)) {
         throw new Error('successor validFrom must be after the predecessor validFrom');
+      }
+      // A label is a one-way door: a successor may add a label to a legacy
+      // unlabelled record, never change or drop one (that would launder access).
+      if (predecessor.label !== undefined && next.label !== predecessor.label) {
+        throw new Error('a successor cannot change label');
       }
       if (next.kind === 'BusinessUnit') {
         const allowed = UNIT_TRANSITIONS[predecessor.state] ?? [];
@@ -187,7 +194,7 @@ export class CompanyStore {
           (next.authorityClass === 'reversible' || next.authorityClass === 'irreversible')
         ) {
           const grant = await this.readRecord(requiredString(next.grantId, 'grantId'));
-          if (!grant || grant.kind !== 'AuthorityGrant' || !isGrantLive(grant, next.validFrom)) {
+          if (!grant || grant.kind !== 'AuthorityGrant' || !isGrantLive(grant, next.validFrom, this.policy)) {
             throw new Error('unit approval needs a live grant record');
           }
           if (

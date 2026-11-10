@@ -2,6 +2,7 @@ import {
   isPlainObject,
   requiredString,
 } from './kernel.mjs';
+import { DEFAULT_POLICY } from './policy.mjs';
 import {
   buildAuthorityGrant,
   isGrantLive,
@@ -48,7 +49,7 @@ export async function authorizeStoredAction(input) {
     }
     grants.push(grant);
   }
-  return authorizeAction({ ...rest, grants });
+  return authorizeAction({ ...rest, grants, policy: store.policy });
 }
 
 // Authorize and spend in one durable act: the successor grant (with the new
@@ -71,11 +72,11 @@ export async function authorizeAndSpend(input) {
     budget: grant.budget,
     spent: result.spend.spent,
     expiresAt: grant.expiresAt,
-    grantedBy: 'founder',
+    grantedBy: grant.grantedBy,
     dedupeKey: grant.dedupeKey,
     supersedes: grant.id,
     eventAt: successorAt,
-  }, () => new Date(successorAt));
+  }, () => new Date(successorAt), input.store.policy);
   await input.store.supersedeRecord(grant.id, successor);
   return { ...result, grantId: successor.id };
 }
@@ -89,6 +90,7 @@ export function authorizeAction(input) {
   const action = requiredString(input.action, 'action');
   const at = requiredString(input.at, 'at');
   const grants = Array.isArray(input.grants) ? input.grants : [];
+  const policy = input.policy ?? DEFAULT_POLICY;
   const result = (allowed, reason, grantId, receiptId, spend = null) => ({
     allowed,
     actionClass,
@@ -116,7 +118,7 @@ export function authorizeAction(input) {
   const scope = requiredString(input.scope, 'scope');
   const grant = grants.find(
     (candidate) =>
-      isGrantLive(candidate, at) &&
+      isGrantLive(candidate, at, policy) &&
       candidate.actionClass === actionClass &&
       candidate.role === actor &&
       candidate.scope === scope,
@@ -159,11 +161,11 @@ export function authorizeAction(input) {
 
 // Pure spend math for the successor grant; the caller persists it through
 // CompanyStore.supersedeRecord, never by editing the grant in place.
-export function applyGrantSpend(grant, cost, at) {
+export function applyGrantSpend(grant, cost, at, policy = DEFAULT_POLICY) {
   if (!isPlainObject(grant) || grant.kind !== 'AuthorityGrant') {
     throw new Error('applyGrantSpend needs an AuthorityGrant');
   }
-  if (!isGrantLive(grant, at)) {
+  if (!isGrantLive(grant, at, policy)) {
     throw new Error('grant is not live at that time');
   }
   if (!(Number.isFinite(cost) && cost >= 0)) {

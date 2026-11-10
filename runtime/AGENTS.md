@@ -41,5 +41,26 @@ decisions, metrics, rules, stage, authority. Nothing here reaches the network.
   value means unreadable, never guessed. Rules carry a receipt id; pruned rules
   say why. Stage moves are +1 only, need criterion evidence that is not all
   assumed, and a backward move needs a founder lever (`stage.mjs`).
+- Memory is label-gated (`policy.mjs`, `memory.mjs`): an item with no valid
+  label is unreadable to everyone; every read names its principal; an item
+  outside the grant is indistinguishable from a missing one; `personal` is
+  owner-only; externals read `public` plus explicitly shared `team` items. A
+  label never changes or drops across supersession. Pending proposals are
+  stored where no read path scans, and only a founder who can read the label
+  approves them.
+- Trust model: labels are a retrieval filter, not an OS boundary. They hold
+  only when agents reach memory through the MCP server (`cb mcp --as <p>`),
+  with the principal fixed in the harness config, and run as an OS user with
+  no file access to the memory or data directories. `--as` and `--policy` on
+  the CLI are trusted-operator flags: anyone who can run the CLI or read the
+  files can claim any principal. Ambiguous attributes fail closed: a repeated
+  `label`, `id`, `owner` or `superseded-by` key withholds the file; a
+  `personal` item with no resolvable owner is unreadable; duplicate ids are
+  withheld only among items the reader can already see; `authorizeStoredAction`
+  takes the founder list from the store, never from the caller.
+- Founder authority is a list of principals in the policy (default
+  `["founder"]`), not a literal. Stage names and exit criteria come from the
+  policy when configured; the +1-only rule and the founder lever for backward
+  moves do not.
 - Nothing here sends, posts, pays, or signs. Effectuators live outside; this
   module records state and gates.
