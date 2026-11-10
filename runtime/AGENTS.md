@@ -48,6 +48,15 @@ decisions, metrics, rules, stage, authority. Nothing here reaches the network.
   label never changes or drops across supersession. Pending proposals are
   stored where no read path scans, and only a founder who can read the label
   approves them.
+- Edits supersede (`propose --supersedes`): the target must be a live file
+  the proposer can read, at the same label; one pending edit per target;
+  only an approved file under `approved/` can supersede, and the old file is
+  never rewritten. Evidence ids must resolve in the proposer's own grant.
+- Untrusted-source content is promoted only by a founder principal passing
+  `founderApproved`; an agent cannot assert it for itself.
+- `reportable` (measures) and `counted` (receipts) are derived and re-checked
+  on every write; a record cannot claim them. Money is counted only with
+  recipient acceptance, payment date and signed scope.
 - Trust model: labels are a retrieval filter, not an OS boundary. They hold
   only when agents reach memory through the MCP server (`cb mcp --as <p>`),
   with the principal fixed in the harness config, and run as an OS user with

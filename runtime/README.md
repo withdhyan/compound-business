@@ -19,6 +19,8 @@ live outside, and every one of them passes this module's gates first.
 | `memory.mjs` | Read side of the memory layer: index, per-task `get`, `show`, citation check, eval. Labelled markdown files plus labelled records |
 | `curation.mjs` | The curation queue: `propose` (pending, invisible) and `approve` (live) |
 | `mcp.mjs` | Optional stdio MCP server over get/show/cite-check, bound to one principal |
+| `evals.mjs` | Eval history (`data/evals/history.jsonl`) and the week-0 vs now trend |
+| `ledger.mjs` | Add/update/list for `BusinessMeasure` and `BusinessReceipt`; counted-money total |
 | `cli.mjs` | The creator loop's command surface: idea add/list/show/amplify/evaluate/decide/advance, and mine |
 | `kernel.mjs` / `safe-path.mjs` | The envelope and path guards; no host dependencies |
 
@@ -118,9 +120,17 @@ cb get --as guest-artist "residency terms" # matching items inside guest-artist'
 cb show --as guest-artist mem_0123456789abcdef
 cb cite-check --as guest-artist reply.md   # exit 1 on a missing or superseded citation (`-` = stdin)
 cb propose --as scribe-bot --label team --title "..." --quote "founder's words" --source "thread 2026-11-09"
+cb propose --as scribe-bot --label team --title "Growth rules, wk 46" --supersedes mem_... \
+   --body "<revised text>" --quote "..." --source "retro 2026-11-13" --evidence "eval recall 0.4 -> 0.6" --evidence mem_...
 cb pending --as cofounder               # founders only: label, source, quote
+cb digest --as cofounder                # pending approvals as one short batch: label, source, quote, change, evidence
 cb approve --as cofounder mem_...       # makes pending entries live
 cb eval --as guest-artist --file tasks.json [--min 0.8]   # [{"query": "...", "expect": ["id", ...]}]
+cb eval --as scribe-bot --file evals/growth.json --role growth --record   # also append to data/evals/history.jsonl
+cb eval-trend --as cofounder [--role growth]    # founders only: week-0 vs latest recall per role
+cb record add measure|receipt --file x.json --label founders   # measures registry, receipt gate
+cb record update <id> --file patch.json         # supersedes; keeps label; re-derives reportable/counted
+cb record list measure|receipt                  # receipts print counted vs not counted
 cb mcp --as guest-artist                   # stdio MCP: cb_get, cb_show, cb_cite_check (read-only)
 ```
 
@@ -139,6 +149,15 @@ cb mcp --as guest-artist                   # stdio MCP: cb_get, cb_show, cb_cite
 - `eval` reports recall: expected ids found in the top results of `get`.
   A task whose expected id is outside the principal's grant counts as missed.
 
+### Compounding: edits, evidence, trend
+
+- **Edits supersede, never overwrite.** `propose --supersedes <id>` names a live memory file the proposer can read, at the same label (a label never changes). It stays pending until a founder approves. `approve` writes the successor under `approved/` with a `supersedes:` line; readers then see the old item as superseded, with the replacement. The old file is not touched and stays readable. Only `approved/` files can supersede; two claimants for one item apply neither (founders see a warning in `index`).
+- **One pending edit per item.** A second proposal against the same target is refused, so a retro folds its changes into one `--body`.
+- **Evidence.** `--evidence` (repeatable, at most 10) is free text or item ids. Cited ids must resolve in the proposer's own grant. It is kept on the pending entry, in `digest`, and under `Evidence:` in the approved file.
+- **Untrusted sources.** `--trust untrusted` is refused unless the proposer is a founder and passes `--founder-approved`. See `docs/injection.md`.
+- **Scorecards.** `eval --record` appends one aggregate line (time, principal, role, recall, hits, expected, task count; no query text) to `<data>/evals/history.jsonl`. `eval-trend` compares each role's first and latest run.
+- **Ledger records.** `BusinessMeasure` (instrument, partner, signed, prereg, threshold, population; `reportable` is derived: signed and preregistered) and `BusinessReceipt` (counterparty, what, amount, recipientAcceptance, paymentDate, signedScope; `counted` is derived: all three present). Both are labelled, retrievable with `cb get`, and corrected by supersession. Ids: `bmeas_...`, `brcpt_...`.
+
 Tests:
 
 ```bash
@@ -147,8 +166,7 @@ node --test runtime/*.test.mjs
 
 ## Status, honestly
 
-- Phase A only: state and gates. The roles (`/chief`, `/money`, `/gtm`, …) are
-  not wired to it yet, and there is no daemon, scheduler, or tool connector.
+- Phase A only: state and gates. The role skills read and write through the memory layer (`cb get`/`cb propose`); they are not yet wired to units, grants or stages. There is no daemon, scheduler, or tool connector (see `docs/steward.md` for the scheduler recipe).
 - Review and founder receipt *presence* is pinned on records; resolving those
   ids to a card or artifact is the wiring layer's job.
 - Costed actions must go through `authorizeAndSpend` — the pure

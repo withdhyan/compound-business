@@ -1,0 +1,11 @@
+{
+  "owner": "founder",
+  "founders": ["founder", "cofounder"],
+  "principals": {
+    "founder": "personal",
+    "cofounder": "personal",
+    "steward": "team",
+    "guest-artist": "team"
+  },
+  "externals": {}
+}

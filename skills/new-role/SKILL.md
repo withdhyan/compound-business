@@ -21,6 +21,7 @@ Writing skills is TDD applied to process documentation. A skill written from ima
    - **Description = WHEN to use, never what it does.** Agents follow workflow summaries in descriptions instead of reading the skill body. Include the symptoms/phrases that should trigger it.
    - **Match the form to the failure:** skips a rule under pressure → prohibition + rationalization table + red flags; complies but output is wrong-shaped → positive recipe/output contract (NOT a prohibition list); omits an element → required structural slot. Don't mix forms; don't append nuance clauses to a working recipe.
    - Standing rails every role inherits: outbox discipline, read-first contract, verdict-style gates where the role gates anything.
+   - Every role ships a rulebook item (`templates/role-rulebook.md`) and 5+ eval tasks (`data/evals/<role>.json`) so /retro can score it from week 0.
    - Keep it under ~150 lines; deep material goes to `references/` loaded on demand.
 4. **Verify:** rerun the scenario with the skill loaded. Not fixed → tighten wording, close the specific loophole verbatim ("violating the letter is violating the spirit"), rerun. Fixed → done.
 5. **Deploy one at a time.** Never batch-create untested skills. Write back: the RED scenario and the wording that finally worked to `docs/learnings/chief.md`; BUSINESS.md role log. Commit.

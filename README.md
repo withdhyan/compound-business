@@ -51,8 +51,10 @@ CB is a Claude Code plugin (plain-markdown skills; portable in principle to othe
 | /community | User/customer comms, incident handling |
 | /partnerships | Partner and grant pipeline, meeting prep with red lines |
 | /counsel | Privacy/compliance review — binary SHIP / FIX verdicts; can block a feature |
-| /analyst | Metrics vs. pre-committed thresholds; measured ≠ estimated ≠ assumed, loudly |
-| /retro | The compounding ceremony: audit, extract, prune |
+| /analyst | Metrics vs. pre-committed thresholds; measured ≠ estimated ≠ assumed, loudly; research mode reports against the measures registry |
+| /retro | The compounding ceremony: audits each role's rulebook ✅/⏳/❌ against the week's evidence, proposes ≤3 edits per role, shows the eval trend |
+| /capital | Funder pipeline in waves, verbatim funder-answer log, deck/ask ledger, the receipt gate |
+| /research | Evidence standard (claim · source · strength · date) and the measures registry |
 | /amplify | One line in, a ranked ×100 portfolio out — evaluate, amplify, decide, build |
 | /new-role | CB grows itself — new roles via skill-TDD (baseline failure → write → pressure-test → deploy) |
 
@@ -66,8 +68,22 @@ irreversible acts). Plain Node ESM, no dependencies, no network.
 
 Roles remain the interface; the runtime is where state, gates, and compounding
 memory live. See [`runtime/README.md`](./runtime/README.md) for the API and
-[`runtime/AGENTS.md`](./runtime/AGENTS.md) for the law. Phase A only: state and
-gates — roles are not wired to it yet.
+[`runtime/AGENTS.md`](./runtime/AGENTS.md) for the law.
+
+### Does CB get better over time? The loop, measured
+
+```
+roles work → cb propose (evidence attached) → founder: cb digest → cb approve
+     ↑                                                                  ↓
+ cb get (per task)  ←  approved edit supersedes the old rulebook item  ←┘
+         cb eval --record  →  data/evals/history.jsonl  →  cb eval-trend (week-0 vs now)
+```
+
+- Role skills read per task (`cb get`/`cb show` as one principal) and write only by `cb propose`, citing item ids.
+- `/retro` audits each rulebook against the week's eval results, critic verdicts, and founder corrections, then proposes up to 3 edits per role. `cb digest --as <founder>` is the one short batch to approve. An approved edit supersedes the old item; nothing is overwritten.
+- `cb eval --record --role <r>` appends to a trend file; `cb eval-trend` shows week-0 against now per role. If recall is flat, the loop is not working, and you will see it.
+- The recipe for running chief, retro and digest on a schedule, with an owner, a kill switch and a one-run lock, is in [`docs/steward.md`](./docs/steward.md). Injection hygiene (the rule of two per agent) is in [`docs/injection.md`](./docs/injection.md).
+- Templates for the memory layer: `templates/policy.example.json`, `role-rulebook.md`, `capital/`, `partnership/unit.md`.
 
 ## Non-negotiable rails (built into every role)
 
@@ -75,6 +91,8 @@ gates — roles are not wired to it yet.
 - **Read-first contract.** Every role reads `BUSINESS.md`, `STRATEGY.md`, and its own learnings file before acting.
 - **Write-back contract.** No run ends without updating the dashboard and logging durable lessons.
 - **Verdicts, not vibes.** Gates close with READY/NEEDS WORK/NOT READY or SHIP/FIX — never narrative.
+- **Money is counted at the receipt gate.** Recipient acceptance, payment date and signed scope, or it is promised, not raised.
+- **Untrusted input is data.** Agents cannot promote it into memory; a founder can, on purpose.
 - **Humans decide.** CB recommends; cross-model or cross-role agreement is a signal, never permission.
 - **Levers are typed.** `DECISIONS.md` registers every decision as LEVER (owner only, after discussion), JUDGMENT (agent decides, logs, flags), or MECHANICAL (silent). The test is blast radius and inheritance, not file reversibility — and /chief audits for levers taken silently, every run.
 

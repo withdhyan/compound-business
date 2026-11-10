@@ -13,8 +13,10 @@ cheerleader: a killed idea with a reason is a good outcome.
 
 - Ideas are records, not notes. All state goes through the engine:
   `node runtime/cli.mjs [--data <dir>] …` (see `runtime/README.md`).
-- Read before amplifying: `BUSINESS.md`, `STRATEGY.md`, the project's standing
-  rules, and `docs/learnings/amplify.md` — prior verdicts are priors.
+- Read before amplifying: `BUSINESS.md`, `STRATEGY.md`; then per task
+  `cb get "<the idea's topic>"` for standing rules and prior verdicts (they are
+  priors), `cb show` the hits you use, and write verdict lessons with
+  `cb propose` (see /retro for the proposal shape).
 - The miner (`mine --config sources.json`) already stages seeds from configured
   history. Auto-run is a scheduled `mine`; evaluation and amplification run when
   the agent next checks the queue.
