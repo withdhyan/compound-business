@@ -19,6 +19,8 @@ export const COMPANY_RECORD_KINDS = Object.freeze([
   'BusinessRule',
   'BusinessStage',
   'BusinessIdea',
+  'BusinessMeasure',
+  'BusinessReceipt',
   'AuthorityGrant',
   'AuditEntry',
 ]);
@@ -32,6 +34,8 @@ const KIND_PREFIX = Object.freeze({
   BusinessRule: 'brule',
   BusinessStage: 'bstage',
   BusinessIdea: 'bidea',
+  BusinessMeasure: 'bmeas',
+  BusinessReceipt: 'brcpt',
   AuthorityGrant: 'agrant',
   AuditEntry: 'audit',
 });
@@ -472,6 +476,90 @@ export function buildBusinessIdea(input, now) {
   });
 }
 
+// A measure is an instrument a partner has (or has not) signed off on, with
+// its pre-registration and pass threshold. `reportable` is derived: only a
+// signed, preregistered measure may be reported as measured.
+export function buildBusinessMeasure(input, now) {
+  const value = requireInput(input, 'BusinessMeasure');
+  const body = measureBody(value);
+  return envelope({
+    kind: 'BusinessMeasure',
+    dedupeKey: value.dedupeKey ?? businessKey('measure', `${body.instrument} ${body.partner}`),
+    value,
+    now,
+    body,
+  });
+}
+
+function measureBody(value) {
+  if (typeof value.signed !== 'boolean') throw new Error('measure signed must be a boolean');
+  const prereg = optionalString(value.prereg) ?? null;
+  return {
+    instrument: requiredString(value.instrument, 'instrument'),
+    partner: requiredString(value.partner, 'partner'),
+    signed: value.signed,
+    prereg,
+    threshold: requiredString(value.threshold, 'threshold'),
+    population: requiredString(value.population, 'population'),
+    ...(optionalString(value.data) ? { data: optionalString(value.data) } : {}),
+    reportable: value.signed && prereg !== null,
+  };
+}
+
+// The receipt gate. Money is counted only when the recipient has accepted in
+// writing, a payment date exists and a signed scope exists. `counted` is
+// derived and re-checked on every write, so a record cannot claim it.
+export const RECEIPT_GATES = Object.freeze(['recipientAcceptance', 'paymentDate', 'signedScope']);
+
+
+export function buildBusinessReceipt(input, now) {
+  const value = requireInput(input, 'BusinessReceipt');
+  const body = receiptBody(value, now);
+  return envelope({
+    kind: 'BusinessReceipt',
+    dedupeKey: value.dedupeKey ?? businessKey('receipt', `${body.counterparty} ${body.what}`),
+    value,
+    now,
+    body,
+  });
+}
+
+const ITEM_ID = /^mem_[0-9a-f]{16}$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
+
+// A gate is met only by evidence of the right shape: acceptance and signed
+// scope are memory item ids (the letter, the signed document, stored and
+// citable); the payment date is an ISO date that is not in the future.
+// Anything else is kept as written and simply does not count.
+export function receiptGateFormat(value) {
+  return {
+    recipientAcceptance: ITEM_ID.test(value.recipientAcceptance ?? ''),
+    signedScope: ITEM_ID.test(value.signedScope ?? ''),
+    paymentDate: ISO_DATE.test(value.paymentDate ?? '') && !Number.isNaN(Date.parse(value.paymentDate)),
+  };
+}
+
+function receiptBody(value, now = () => new Date()) {
+  if (!Number.isFinite(value.amount) || value.amount < 0) {
+    throw new Error('receipt amount must be a non-negative number');
+  }
+  const gates = {
+    recipientAcceptance: optionalString(value.recipientAcceptance) ?? null,
+    paymentDate: optionalString(value.paymentDate) ?? null,
+    signedScope: optionalString(value.signedScope) ?? null,
+  };
+  const ok = receiptGateFormat(gates);
+  const notFuture = ok.paymentDate && Date.parse(gates.paymentDate) <= now().getTime();
+  return {
+    counterparty: requiredString(value.counterparty, 'counterparty'),
+    what: requiredString(value.what, 'what'),
+    amount: value.amount,
+    ...(optionalString(value.currency) ? { currency: optionalString(value.currency) } : {}),
+    ...gates,
+    counted: ok.recipientAcceptance && ok.signedScope && Boolean(notFuture),
+  };
+}
+
 export function buildAuthorityGrant(input, now, policy = DEFAULT_POLICY) {
   const value = requireInput(input, 'AuthorityGrant');
   const role = requiredString(value.role, 'role');
@@ -773,6 +861,27 @@ function assertKindBody(record, policy) {
         throw new Error(`a ${status} idea needs at least one chosen variant`);
       }
       normalizeIdeaEvaluation(record.evaluation);
+      break;
+    }
+    case 'BusinessMeasure': {
+      const body = measureBody({ ...record, prereg: record.prereg ?? undefined });
+      if (record.reportable !== body.reportable) {
+        throw new Error('measure reportable must be signed and preregistered');
+      }
+      break;
+    }
+    case 'BusinessReceipt': {
+      receiptBody({
+        ...record,
+        recipientAcceptance: record.recipientAcceptance ?? undefined,
+        paymentDate: record.paymentDate ?? undefined,
+        signedScope: record.signedScope ?? undefined,
+      });
+      const fmt = receiptGateFormat(record);
+      const dated = fmt.paymentDate && Date.parse(record.paymentDate) <= Date.now();
+      if (record.counted !== false && !(record.counted === true && fmt.recipientAcceptance && fmt.signedScope && dated)) {
+        throw new Error('receipt counted needs recipient acceptance, payment date and signed scope');
+      }
       break;
     }
     case 'AuthorityGrant': {

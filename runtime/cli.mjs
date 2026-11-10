@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-import { promises as fs } from 'node:fs';
+import { promises as fs, constants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { approve, listPending, propose } from './curation.mjs';
+import { approve, digest, listPending, propose, reject } from './curation.mjs';
+import { evalTrend, recordEval } from './evals.mjs';
+import { addRecord, guardLedgerWrite, listLedgerFor, updateRecord } from './ledger.mjs';
 import { serve } from './mcp.mjs';
 import { buildIndex, citeCheck, getItems, runEval, showItem } from './memory.mjs';
 import { mineSources } from './mine.mjs';
@@ -34,10 +36,15 @@ import { createCompanyStore } from './store.mjs';
 //   node runtime/cli.mjs show --as <p> <id>
 //   node runtime/cli.mjs cite-check --as <p> <file|->        (exit 1 on a bad cite)
 //   node runtime/cli.mjs propose --as <p> --label <l> --title <t> --quote <q> --source <s>
+//                      [--body <new text>] [--aliases "a, b"] [--supersedes <id>] [--evidence <e>]... [--trust untrusted --founder-approved]
 //   node runtime/cli.mjs pending --as <founder>
 //   node runtime/cli.mjs approve --as <founder> <id>...
-//   node runtime/cli.mjs eval --as <p> --file tasks.json [--min <recall>]
-//   node runtime/cli.mjs mcp --as <p>                         (stdio MCP, read-only)
+//   node runtime/cli.mjs digest --as <founder> [--out <file>] (pending batch, full text; --out writes mode 600, prints a count)
+//   node runtime/cli.mjs reject --as <founder> <id>... | --stale
+//   node runtime/cli.mjs eval --as <p> --file tasks.json [--min <recall>] [--role <r>] [--record]
+//   node runtime/cli.mjs eval-trend --as <founder> [--role <r>] [--out <file>]
+//   node runtime/cli.mjs record add|update|list measure|receipt --as <p>   (writes: founder only)
+//   node runtime/cli.mjs mcp --as <p> [--untrusted]                         (stdio MCP; --untrusted stamps every cb_propose untrusted)
 
 export async function addIdea(store, options) {
   const statement = required(options.statement, 'statement');
@@ -313,22 +320,79 @@ export async function executeMemoryCommand(group, rest, flags, ctx) {
           source: flags.source,
           owner: flags.owner,
           summary: flags.summary,
+          aliases: typeof flags.aliases === 'string' ? flags.aliases : undefined,
+          body: typeof flags.body === 'string' ? flags.body : undefined,
+          supersedes: flags.supersedes,
+          evidence: flags.evidence === true ? undefined : flags.evidence,
+          trust: flags.trust,
+          founderApproved: flags['founder-approved'] === true,
         }),
         exitCode: 0,
       };
     case 'pending':
       return { value: await listPending(ctx, as()), exitCode: 0 };
+    case 'digest': {
+      const value = await digest(ctx, as());
+      return { value: await maybeWrite(value, flags, value.count), exitCode: 0 };
+    }
+    case 'reject':
+      return { value: await reject(ctx, as(), rest, { stale: flags.stale === true }), exitCode: 0 };
     case 'approve':
       return { value: await approve(ctx, as(), rest), exitCode: 0 };
+    case 'eval-trend': {
+      const value = await evalTrend(ctx, as(), { role: typeof flags.role === 'string' ? flags.role : undefined });
+      return { value: await maybeWrite(value, flags, value.series.length), exitCode: 0 };
+    }
+    case 'record':
+      return { value: await executeRecordCommand(rest, flags, ctx, as()), exitCode: 0 };
     case 'eval': {
       const tasks = await readJsonFile(flags.file, 'tasks');
       const report = await runEval(ctx, as(), Array.isArray(tasks) ? tasks : tasks.tasks);
+      if (flags.record === true) await recordEval(ctx, report, { role: typeof flags.role === 'string' ? flags.role : undefined });
       const min = flags.min === undefined ? 0 : Number(flags.min);
       return { value: report, exitCode: report.recall >= min ? 0 : 1 };
     }
     default:
       return null;
   }
+}
+
+// Founder-level output goes to a file only the founder can read (mode 600);
+// stdout (and so any scheduler log) carries a count, never the text.
+async function maybeWrite(value, flags, count) {
+  if (typeof flags.out !== 'string') return value;
+  const file = path.resolve(flags.out);
+  // Never follow a planted symlink: the digest holds founder-level text.
+  const existing = await fs.lstat(file).catch(() => null);
+  if (existing?.isSymbolicLink()) throw new Error(`refusing to write the digest through a symlink: ${file}`);
+  const handle = await fs.open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+  try {
+    await handle.writeFile(`${format(value)}\n`);
+    await handle.chmod(0o600);
+  } finally {
+    await handle.close();
+  }
+  return { written: file, count };
+}
+
+// Ledger records (measures, receipts). Every command names a principal: reads
+// are label-filtered, writes are founder-only and cite evidence that resolves.
+// Agents do not write ledger records; they propose a memory item and a founder
+// applies it here.
+async function executeRecordCommand([verb, target], flags, ctx, principal) {
+  if (verb === 'list') return listLedgerFor(ctx, principal, target);
+  if (verb === 'add') {
+    const input = await readJsonFile(flags.file, 'record');
+    await guardLedgerWrite(ctx, principal, input);
+    return addRecord(ctx.store, target, input, { label: flags.label });
+  }
+  if (verb === 'update') {
+    const patch = await readJsonFile(flags.file, 'record');
+    await guardLedgerWrite(ctx, principal, patch);
+    await showItem(ctx, principal, target);
+    return updateRecord(ctx.store, target, patch);
+  }
+  throw new Error('usage: record add <measure|receipt> --as <founder> --file f.json --label <l> | record update <id> --as <founder> --file f.json | record list <measure|receipt> --as <p>');
 }
 
 async function readStdin() {
@@ -352,7 +416,7 @@ async function main() {
   };
 
   if (group === 'mcp') {
-    await serve(ctx, principalFrom(flags));
+    await serve(ctx, principalFrom(flags), process.stdin, process.stdout, { untrusted: flags.untrusted === true });
     return;
   }
   const memory = await executeMemoryCommand(group, [verb, ...rest].filter((x) => x !== undefined), flags, ctx);
@@ -414,7 +478,7 @@ async function main() {
   }
 
   throw new Error(
-    'usage: cli.mjs [--data <dir>] idea add|list|show|amplify|evaluate|decide|advance | mine | index|get|show|cite-check|propose|pending|approve|eval|mcp --as <principal>',
+    'usage: cli.mjs [--data <dir>] idea add|list|show|amplify|evaluate|decide|advance | mine | index|get|show|cite-check|propose|pending|digest|reject|approve|eval|eval-trend|mcp --as <principal> | record add|update|list <principal>',
   );
 }
 
@@ -441,6 +505,29 @@ function formatMemory(value) {
     return [...lines, `recall ${value.recall.toFixed(3)} (${value.hits}/${value.expected})`].join('\n');
   }
   if (value.record) return `${value.id}  ${value.label}  ${value.path}\n${JSON.stringify(value.record, null, 2)}`;
+  if (value.written) return `${value.count} entries written to ${value.written} (mode 600)`;
+  if (value.rejected) return `rejected: ${value.rejected.join(' ') || '(none)'}`;
+  if (value.rows && value.count !== undefined) {
+    if (value.count === 0) return 'nothing pending';
+    const lines = value.rows.map((r) => [
+      `${r.id}  ${r.label} · ${r.source}${r.writeDown ? `  [WRITE-DOWN: proposer ${r.proposedBy} holds ${r.proposerGrant}]` : ''}${r.trust === 'untrusted' ? '  [UNTRUSTED, founder-vouched]' : ''}`,
+      `  quote: "${r.quote}"`,
+      `  change: ${r.change}`,
+      ...(r.summary ? [`  summary: ${r.summary}`] : []),
+      ...(r.owner ? [`  owner: ${r.owner}`] : []),
+      ...r.evidence.map((e) => `  evidence: ${e}`),
+    ].join('\n'));
+    return [...lines, `approve: cb approve --as ${value.principal} <id>...   reject: cb reject --as ${value.principal} <id>...`].join('\n');
+  }
+  if (value.series) {
+    const lines = value.series.map((r) => `${r.key.padEnd(24)} runs ${r.runs}  week-0 ${r.first.recall.toFixed(2)} -> now ${r.last.recall.toFixed(2)}  (${r.delta >= 0 ? '+' : ''}${r.delta.toFixed(2)})`);
+    return lines.length ? lines.join('\n') : '(no eval history)';
+  }
+  if (value.records) {
+    const lines = value.records.map((r) => `${r.id}  ${r.label ?? '-'}  ${r.instrument ?? r.counterparty}${r.counted !== undefined ? (r.counted ? '  COUNTED' : '  not counted') : r.reportable ? '  reportable' : '  not reportable'}`);
+    const t = value.totals ? [`counted ${JSON.stringify(value.totals.counted)}  not counted ${JSON.stringify(value.totals.uncounted)}`] : [];
+    return [...lines, ...t].join('\n') || '(none)';
+  }
   if (value.approved) return `approved: ${value.approved.join(' ')}`;
   return null;
 }

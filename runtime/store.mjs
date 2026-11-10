@@ -21,7 +21,7 @@ import {
 // checks. Cross-process serialization is the daemon's lock, not this module's.
 const MUTATION_QUEUES = new Map();
 
-function serializeByDataDir(dataDir, operation) {
+export function serializeByDataDir(dataDir, operation) {
   const key = queueKey(dataDir);
   const previous = MUTATION_QUEUES.get(key) ?? Promise.resolve();
   const run = previous.then(operation, operation);
@@ -165,6 +165,16 @@ export class CompanyStore {
       // unlabelled record, never change or drop one (that would launder access).
       if (predecessor.label !== undefined && next.label !== predecessor.label) {
         throw new Error('a successor cannot change label');
+      }
+      // A measure's design is pinned once it is reportable or has data: a
+      // changed threshold, prereg, instrument, partner or population is a new
+      // measure, never an edit (no post-hoc goalposts).
+      if (next.kind === 'BusinessMeasure' && (predecessor.reportable || predecessor.data)) {
+        for (const field of ['instrument', 'partner', 'prereg', 'threshold', 'population']) {
+          if (next[field] !== predecessor[field]) {
+            throw new Error(`a reportable or data-bearing measure cannot change ${field}; register a new measure`);
+          }
+        }
       }
       if (next.kind === 'BusinessUnit') {
         const allowed = UNIT_TRANSITIONS[predecessor.state] ?? [];
