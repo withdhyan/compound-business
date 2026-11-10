@@ -9,7 +9,7 @@ The raise is a pipeline with a receipt gate, not a feeling. Everything here is p
 
 ## Ground truth
 
-- **Money counts only past the receipt gate:** recipient acceptance in writing, a payment date, and a signed scope. Until then it is "promised", never "raised". `cb record list receipt --as <you>` prints counted vs not counted (per currency) for the receipts your grant can read, and what each lacks.
+- **Money counts only past the receipt gate:** recipient acceptance in writing, a payment date, and a signed scope. Until then it is "promised", never "raised". `cb_get "receipt <funder ref>"` shows the receipts your grant can read; a founder's `cb record list receipt` prints counted vs not counted per currency and what each lacks.
 - **Funder answers are data, kept verbatim.** The exact words answer the real question ("would you fund a residency?"); a paraphrase answers a different one.
 - **Nothing sends.** Emails, decks and DMs go to `outbox/`; the founder sends.
 - Pitch craft (story line, ask, objection answers, call script) is the `pitch-craft` skill's job, by reference: load it for the words, use this skill for the pipeline.

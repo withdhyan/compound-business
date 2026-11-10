@@ -132,7 +132,7 @@ cb eval-trend --as cofounder [--role growth]    # founders only: week-0 vs lates
 cb record add measure|receipt --as cofounder --file x.json --label founders   # founder only
 cb record update <id> --as cofounder --file patch.json   # founder only; supersedes; keeps label; re-derives reportable/counted
 cb record list measure|receipt --as <p>        # only records inside p's grant; receipts print counted vs not, per currency
-cb mcp --as guest-artist                   # stdio MCP: cb_get, cb_show, cb_cite_check, cb_propose (pending only)
+cb mcp --as guest-artist [--untrusted]    # stdio MCP (--untrusted stamps proposals untrusted): cb_get, cb_show, cb_cite_check, cb_propose (pending only)
 ```
 
 (`cb` is `node runtime/cli.mjs [--data <dir>]`.) Add `--json` for machine output.
@@ -157,6 +157,7 @@ cb mcp --as guest-artist                   # stdio MCP: cb_get, cb_show, cb_cite
 - **The digest shows what will be written**, in full, and flags a `WRITE-DOWN` (proposer's grant above the item's label). Evidence ids above the item's label are redacted when approved. Approved untrusted items show `trust: untrusted` in `get`/`show`.
 - **Evidence.** `--evidence` (repeatable, at most 10) is free text or item ids. Cited ids must resolve in the proposer's own grant. It is kept on the pending entry, in `digest`, and under `Evidence:` in the approved file.
 - **Untrusted sources.** `--trust untrusted` is refused unless the proposer is a founder and passes `--founder-approved`. See `docs/injection.md`.
+- **Retrieval.** `get` ranks with BM25 over stemmed tokens (title, alias and summary hits weigh more than body hits), plus a small built-in synonym map of generic business and research words (funder/investor/backer/patron, money/funding/capital, deck/presentation/pitch, false/untrue, and so on). Corpus statistics use only the items the reader can see. An item may carry `aliases: a, b` in its frontmatter (indexed like the title; `propose --aliases "a, b"` adds them, and the digest shows them). `get "q1 | q2 | q3"` ranks the union of several phrasings by reciprocal rank.
 - **Scorecards.** `eval --record` appends one aggregate line (time, principal, role, recall, hits, expected, task count; no query text) to `<data>/evals/history.jsonl`. `eval-trend` compares each role's first and latest run.
 - **Ledger records.** `BusinessMeasure` (instrument, partner, signed, prereg, threshold, population; `reportable` is derived: signed and preregistered) and `BusinessReceipt` (counterparty, what, amount, currency, recipientAcceptance, paymentDate, signedScope; `counted` is derived: acceptance and signed scope are memory item ids, the payment date is an ISO date not in the future). Totals are per currency. A reportable (or data-bearing) measure cannot change instrument, partner, prereg, threshold or population: a new design is a new measure. Both are labelled, retrievable with `cb get`, and corrected by supersession. Ids: `bmeas_...`, `brcpt_...`.
 

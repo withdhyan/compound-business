@@ -20,26 +20,30 @@ const MAX_EVIDENCE = 10;
 // blocks edits, shows in the digest, or can be approved. `reject --stale` purges.
 export const PENDING_TTL_DAYS = 30;
 
-export function propose(ctx, principal, input) {
-  return serializeByDataDir(ctx.dataDir, () => proposeLocked(ctx, principal, input));
+// options.untrustedLaunch: the proposing agent was launched as an untrusted
+// reader (`cb mcp --untrusted`); everything it proposes is stamped untrusted
+// and still needs a founder's approval.
+export function propose(ctx, principal, input, options = {}) {
+  return serializeByDataDir(ctx.dataDir, () => proposeLocked(ctx, principal, input, options));
 }
 
-async function proposeLocked(ctx, principal, input) {
+async function proposeLocked(ctx, principal, input, options) {
   const who = requiredString(principal, 'principal');
   const label = normalizeLabel(input?.label);
   const owner = optionalString(input?.owner) ?? (label === 'personal' ? who : undefined);
   if (!Object.hasOwn(ctx.policy.principals, who) || !canRead(ctx.policy, who, label, owner)) {
     throw new Error(`${who} cannot propose a ${label} item`);
   }
-  const trust = optionalString(input?.trust) ?? 'trusted';
+  const trust = options.untrustedLaunch ? 'untrusted' : optionalString(input?.trust) ?? 'trusted';
   if (!TRUST.includes(trust)) throw new Error(`invalid trust: ${trust}`);
   // Content from an untrusted source (inbound mail, a web page, a partner's
   // text) is promoted only after a founder has read it and says so. The flag
   // is honoured only from a founder principal; an agent cannot assert it.
-  if (trust === 'untrusted' && !(input.founderApproved === true && isFounderPrincipal(who, ctx.policy))) {
+  if (trust === 'untrusted' && !options.untrustedLaunch && !(input.founderApproved === true && isFounderPrincipal(who, ctx.policy))) {
     throw new Error('untrusted source needs a founder to propose it with founderApproved');
   }
   const evidence = await checkEvidence(ctx, who, input.evidence);
+  const aliases = cleanAliases(input.aliases);
   const supersedes = optionalString(input?.supersedes);
   if (supersedes) await checkTarget(ctx, who, supersedes, label);
   const entry = {
@@ -52,7 +56,8 @@ async function proposeLocked(ctx, principal, input) {
     ...(optionalString(input.body) ? { body: String(input.body).trim() } : {}),
     ...(supersedes ? { supersedes } : {}),
     ...(evidence.length ? { evidence } : {}),
-    ...(trust === 'untrusted' ? { trust, founderApproved: true } : {}),
+    ...(trust === 'untrusted' ? { trust, ...(options.untrustedLaunch ? {} : { founderApproved: true }) } : {}),
+    ...(aliases.length ? { aliases } : {}),
   };
   const id = `mem_${createHash('sha256')
     .update(JSON.stringify([who, entry.label, entry.title, entry.quote, entry.source, ...(supersedes ? [supersedes] : [])]))
@@ -144,6 +149,7 @@ export async function digest(ctx, principal) {
       body: row.body ?? null,
       change: row.body ? `${change} -- ${row.body}` : change,
       evidence: row.evidence ?? [],
+      aliases: row.aliases ?? [],
       trust: row.trust ?? 'trusted',
       supersedes: row.supersedes ?? null,
       proposedBy: row.proposedBy,
@@ -152,6 +158,17 @@ export async function digest(ctx, principal) {
     });
   }
   return { principal, count: rows.length, rows };
+}
+
+// Alternative words for finding an item (indexed like the title). Short,
+// one-line terms; the digest shows them to the founder.
+function cleanAliases(value) {
+  if (value === undefined || value === null || value === true) return [];
+  const list = (Array.isArray(value) ? value : String(value).split(','))
+    .map((entry) => oneLine(String(entry)))
+    .filter(Boolean);
+  if (list.length > 20 || list.some((entry) => entry.length > 60)) throw new Error('aliases: at most 20 terms of 60 characters');
+  return [...new Set(list)];
 }
 
 async function checkEvidence(ctx, who, value) {
@@ -241,6 +258,7 @@ function render(row, approver, at) {
     ...(row.owner ? [`owner: ${row.owner}`] : []),
     ...(row.supersedes ? [`supersedes: ${row.supersedes}`] : []),
     ...(row.trust ? [`trust: ${row.trust}`] : []),
+    ...(row.aliases?.length ? [`aliases: ${row.aliases.map(oneLine).join(', ')}`] : []),
     `updated: ${at.slice(0, 10)}`,
     `source: ${row.source}`,
     `proposed-by: ${row.proposedBy}`,

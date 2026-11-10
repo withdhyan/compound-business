@@ -6,7 +6,7 @@ The runtime never schedules itself and has no network code. A **steward** is a r
 
 1. **Own identity, own grant.** The steward is a principal in `data/policy.json` (`"steward": "team"`), never a person and never a founder. It reads only at that principal, so `founders` and `personal` items, and the digest of them, are out of its reach. Nothing it proposes carries a person's name. Grant it the lowest label that lets the job work; the founders-labelled store stays out of reach unless a job needs it and a founder says so.
 2. **Named owner.** One founder owns the steward: it is in the job's header comment and in BUSINESS.md. The owner reads the digest, fixes failures, and holds the kill switch.
-3. **Propose only, through MCP.** The steward reads and proposes through the MCP bridge (`cb mcp --as steward`: `cb_get`, `cb_show`, `cb_cite_check`, `cb_propose`; principal fixed in the harness config, no trust or approval inputs). It is not given the CLI, so it cannot claim another principal. It cannot approve, cannot send (drafts go to `outbox/`), cannot spend.
+3. **Propose only, through MCP.** The steward reads and proposes through the MCP bridge (`cb mcp --as steward`: `cb_get`, `cb_show`, `cb_cite_check`, `cb_propose`; principal fixed in the harness config, no trust or approval inputs). It is not given the CLI, so it cannot claim another principal. A researcher-style agent that reads the web is launched with `cb mcp --as <p> --untrusted`, which stamps everything it proposes as untrusted (a founder still approves). It cannot approve, cannot send (drafts go to `outbox/`), cannot spend.
 4. **Kill switch.** A file named `STOP` in the steward home halts every job at its next start. Removing the scheduler entry halts them permanently. One command: `touch steward/STOP`.
 5. **One-run lock.** A job that is still running is never started twice; a lock older than two hours is treated as stale and cleared. A skipped run is logged, not retried in a loop.
 
@@ -19,7 +19,7 @@ The runtime never schedules itself and has no network code. A **steward** is a r
 | chief | Monday 08:00 | `/chief` | week queue, and a count of proposals waiting on a founder |
 | retro | Friday 16:00 | `/retro` (all roles) | ≤3 edit proposals per role |
 | digest | daily 09:00, **as the founder's own OS user, not the steward** | `cb digest --as <founder> --out <founder-only file>` | the pending batch, written mode 600 to a path the steward cannot read; stdout carries only a count |
-| evals | Friday 15:30 | `cb eval --as <role principal> --role <r> --record` per role | rows in `data/evals/history.jsonl`; the founder reads `cb eval-trend` |
+| evals | Friday 15:30, run by the operator, not the steward | `cb eval --as <role principal> --role <r> --record` per role | rows in `data/evals/history.jsonl`; the founder reads `cb eval-trend` |
 
 Schedule evals before retro so retro reads fresh numbers.
 

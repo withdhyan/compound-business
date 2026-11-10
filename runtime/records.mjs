@@ -878,7 +878,8 @@ function assertKindBody(record, policy) {
         signedScope: record.signedScope ?? undefined,
       });
       const fmt = receiptGateFormat(record);
-      if (record.counted !== false && !(record.counted === true && fmt.recipientAcceptance && fmt.signedScope && fmt.paymentDate)) {
+      const dated = fmt.paymentDate && Date.parse(record.paymentDate) <= Date.now();
+      if (record.counted !== false && !(record.counted === true && fmt.recipientAcceptance && fmt.signedScope && dated)) {
         throw new Error('receipt counted needs recipient acceptance, payment date and signed scope');
       }
       break;

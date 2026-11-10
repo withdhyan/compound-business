@@ -352,3 +352,34 @@ test('measures: reportable or data-bearing measures keep their design; drafts ma
   const edited = await updateRecord(ctx.store, draft.id, { threshold: 't2', data: 'mem_0123456789abcdef' });
   await assert.rejects(updateRecord(ctx.store, edited.id, { threshold: 't3' }), /cannot change threshold/);
 });
+
+test('N-MCP launch --untrusted stamps every cb_propose untrusted, still pending for a founder', async () => {
+  const { ctx } = await setup();
+  const { handleMessage } = await import('./mcp.mjs');
+  const res = await handleMessage(ctx, 'scribe', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'cb_propose', arguments: { label: 'team', title: 'web', quote: 'q', source: 'web', trust: 'trusted' } } }, { untrusted: true });
+  assert.ok(!res.result.isError);
+  const [row] = (await digest(ctx, 'founder')).rows;
+  assert.equal(row.trust, 'untrusted');
+  await approve(ctx, 'founder', [row.id]);
+  assert.match((await showItem(ctx, 'scribe', row.id)).body, /UNTRUSTED SOURCE/);
+});
+
+test('N-OUT digest --out refuses a planted symlink and leaves the target alone', async () => {
+  const { ctx, dataDir, role } = await setup();
+  const { executeMemoryCommand } = await import('./cli.mjs');
+  await propose(ctx, 'scribe', edit(role));
+  const target = path.join(dataDir, 'agent-owned.txt');
+  await fs.writeFile(target, 'mine');
+  const out = path.join(dataDir, 'out.txt');
+  await fs.symlink(target, out);
+  await assert.rejects(executeMemoryCommand('digest', [], { as: 'founder', out }, ctx), /symlink/);
+  assert.equal(await fs.readFile(target, 'utf8'), 'mine');
+});
+
+test('N6 the receipt shape check rejects counted:true with a future date, even on a raw write', async () => {
+  const { ctx } = await setup();
+  const r = await addRecord(ctx.store, 'receipt', rc({ counterparty: 'F', amount: 1, recipientAcceptance: 'mem_0123456789abcdef', signedScope: 'mem_fedcba9876543210', paymentDate: '2020-01-01' }), { label: 'founders' });
+  assert.equal(r.counted, true);
+  const forged = { ...r, id: r.id.replace(/.$/, r.id.endsWith('0') ? '1' : '0'), dedupeKey: 'receipt:forged', paymentDate: '2099-01-01' };
+  await assert.rejects(ctx.store.writeRecord(forged), /counted/);
+});

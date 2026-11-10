@@ -25,6 +25,7 @@ Fill this table for every agent you add. A row with three yeses is a defect, not
 ## What the runtime enforces
 
 - **Writing memory is not acting.** `cb propose` / the MCP tool `cb_propose` only creates a pending entry no reader can see. The MCP tool is bound to the launch principal and has no `trust`, `founderApproved` or `owner` input. Only a founder principal approves.
+- **`cb mcp --untrusted`.** An agent that reads untrusted content is launched with this flag; every `cb_propose` it makes is stored with `trust: untrusted`, shown in the digest, and visible to later readers.
 - **Ledger writes are founder-only.** `record add|update` need a founder principal and evidence ids that resolve; agents propose a candidate item instead.
 - **The digest shows what will be written.** Full quote, full body, summary, owner, evidence; a `WRITE-DOWN` flag when the proposer's grant is above the item's label; evidence ids above the item's label are replaced with `[restricted item]` when approved.
 - **Untrusted provenance is visible downstream.** Approved untrusted items carry `trust: untrusted`, shown in `get`/`show` results.

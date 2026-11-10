@@ -31,12 +31,13 @@ const TOOLS = [
   },
   {
     name: 'cb_propose',
-    description: 'Propose a memory entry or an edit (supersedes). It stays pending until a founder approves; nothing you propose is readable meanwhile.',
+    description: 'Add `aliases` (alternative search words) if the item is hard to find by its own words. Propose a memory entry or an edit (supersedes). It stays pending until a founder approves; nothing you propose is readable meanwhile.',
     inputSchema: {
       type: 'object',
       properties: {
         label: { type: 'string' }, title: { type: 'string' }, quote: { type: 'string' }, source: { type: 'string' },
         summary: { type: 'string' }, body: { type: 'string' }, supersedes: { type: 'string' },
+        aliases: { type: 'array', items: { type: 'string' } },
         evidence: { type: 'array', items: { type: 'string' } },
       },
       required: ['label', 'title', 'quote', 'source'],
@@ -44,19 +45,19 @@ const TOOLS = [
   },
 ];
 
-async function runTool(ctx, principal, name, args = {}) {
+async function runTool(ctx, principal, name, args = {}, launch = {}) {
   if (name === 'cb_get') return getItems(ctx, principal, args.query, { limit: args.limit });
   if (name === 'cb_show') return showItem(ctx, principal, args.id);
   if (name === 'cb_cite_check') return citeCheck(ctx, principal, String(args.text ?? ''));
   if (name === 'cb_propose') {
-    const { label, title, quote, source, summary, body, supersedes, evidence } = args;
-    const row = await propose(ctx, principal, { label, title, quote, source, summary, body, supersedes, evidence });
+    const { label, title, quote, source, summary, body, supersedes, evidence, aliases } = args;
+    const row = await propose(ctx, principal, { label, title, quote, source, summary, body, supersedes, evidence, aliases }, { untrustedLaunch: launch.untrusted === true });
     return { id: row.id, status: row.status, label: row.label };
   }
   throw new Error(`unknown tool: ${name}`);
 }
 
-export async function handleMessage(ctx, principal, message) {
+export async function handleMessage(ctx, principal, message, launch = {}) {
   const reply = (result) => ({ jsonrpc: '2.0', id: message.id, result });
   if (message.id === undefined || message.id === null) return null;
   switch (message.method) {
@@ -72,7 +73,7 @@ export async function handleMessage(ctx, principal, message) {
       return reply({ tools: TOOLS });
     case 'tools/call':
       try {
-        const out = await runTool(ctx, principal, message.params?.name, message.params?.arguments);
+        const out = await runTool(ctx, principal, message.params?.name, message.params?.arguments, launch);
         return reply({ content: [{ type: 'text', text: JSON.stringify(out) }] });
       } catch (error) {
         return reply({ isError: true, content: [{ type: 'text', text: error.message }] });
@@ -82,13 +83,13 @@ export async function handleMessage(ctx, principal, message) {
   }
 }
 
-export async function serve(ctx, principal, input = process.stdin, output = process.stdout) {
+export async function serve(ctx, principal, input = process.stdin, output = process.stdout, launch = {}) {
   const lines = createInterface({ input });
   for await (const line of lines) {
     if (!line.trim()) continue;
     let response;
     try {
-      response = await handleMessage(ctx, principal, JSON.parse(line));
+      response = await handleMessage(ctx, principal, JSON.parse(line), launch);
     } catch {
       response = { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } };
     }

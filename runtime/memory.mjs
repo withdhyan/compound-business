@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { optionalString, requiredString } from './kernel.mjs';
 import { LABELS, canRead, isFounderPrincipal } from './policy.mjs';
+import { indexDocs, rankQueries, splitQueries, tokenize } from './search.mjs';
 
 // Read side of the memory layer: markdown files (frontmatter `label:`) and
 // labelled business records, searched per task within one principal's grant.
@@ -30,7 +31,6 @@ const RECORD_KINDS = Object.freeze([
 const MAX_FILE_BYTES = 1024 * 1024;
 const FILE_ID = /^mem_[0-9a-f]{16}$/;
 const CITATION = /\b(?:(?:bunit|bdec|bmet|brule|bstage|bidea|bmeas|brcpt)_[0-9a-f]{24}|mem_[0-9a-f]{16})\b/g;
-const STOPWORDS = new Set(['the', 'a', 'an', 'of', 'to', 'and', 'or', 'in', 'on', 'for', 'is', 'it', 'we', 'do']);
 
 // ---- collection -------------------------------------------------------------
 
@@ -124,6 +124,7 @@ function fileItem(display, content, mtime) {
     updated: meta.updated ?? mtime.toISOString().slice(0, 10),
     supersededBy: meta['superseded-by'] ?? null,
     supersedes: meta.supersedes ?? null,
+    aliases: meta.aliases ? meta.aliases.replace(/^\[|\]$/g, '') : '',
     trust: meta.trust === 'untrusted' ? 'untrusted' : null,
     text: `${title}\n${body}`.toLowerCase(),
     raw: { body, display },
@@ -258,39 +259,28 @@ export async function buildIndex(ctx, principal) {
 }
 
 export async function getItems(ctx, principal, query, options = {}) {
-  const tokens = tokenize(requiredString(query, 'query'));
-  if (tokens.length === 0) throw new Error('query is required');
+  const queries = splitQueries(requiredString(query, 'query'));
+  const queryTokens = [...new Set(queries.flatMap((entry) => tokenize(entry)))];
+  if (queryTokens.length === 0) throw new Error('query is required');
   const limit = options.limit ?? 8;
   const { items } = await collect(ctx);
   const visible = visibleTo(ctx, principal, items);
   const byId = new Map(visible.map((item) => [item.id, item]));
   const ids = new Set(byId.keys());
-  const scored = [];
-  for (const item of visible) {
-    const title = item.title.toLowerCase();
-    const summary = item.summary.toLowerCase();
-    let score = 0;
-    let hit = false;
-    for (const token of tokens) {
-      const inText = item.text.includes(token);
-      if (inText) hit = true;
-      score += (title.includes(token) ? 3 : 0) + (summary.includes(token) ? 2 : 0) + (inText ? 1 : 0);
-    }
-    if (hit) scored.push({ item, score });
-  }
-  scored.sort(
-    (a, b) =>
-      Number(Boolean(a.item.supersededBy)) - Number(Boolean(b.item.supersededBy)) ||
-      b.score - a.score ||
-      String(b.item.updated).localeCompare(String(a.item.updated)) ||
-      a.item.id.localeCompare(b.item.id),
-  );
+  // Statistics come from this principal's visible items only.
+  const ranked = rankQueries(indexDocs(visible), queries);
+  // Live items first, superseded ones after (stable within each group).
+  const ordered = [
+    ...ranked.filter(({ item }) => !item.supersededBy),
+    ...ranked.filter(({ item }) => item.supersededBy),
+  ];
+  const plain = [...new Set(queries.flatMap((entry) => (entry.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])))];
   return {
     principal,
     query,
-    results: scored.slice(0, limit).map(({ item }) => ({
+    results: ordered.slice(0, limit).map(({ item }) => ({
       ...publicView(item, byId, ids),
-      snippet: snippet(item, tokens),
+      snippet: snippet(item, plain),
     })),
   };
 }
@@ -360,12 +350,6 @@ export async function runEval(ctx, principal, tasks, options = {}) {
 }
 
 // ---- helpers ----------------------------------------------------------------------
-
-function tokenize(query) {
-  return [...new Set(
-    (query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((token) => !STOPWORDS.has(token) && (token.length > 1 || /\d/.test(token))),
-  )];
-}
 
 function snippet(item, tokens) {
   const lines = (item.source === 'file' ? item.raw.body : item.summary).split(/\r?\n/);

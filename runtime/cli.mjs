@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { promises as fs } from 'node:fs';
+import { promises as fs, constants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,7 +36,7 @@ import { createCompanyStore } from './store.mjs';
 //   node runtime/cli.mjs show --as <p> <id>
 //   node runtime/cli.mjs cite-check --as <p> <file|->        (exit 1 on a bad cite)
 //   node runtime/cli.mjs propose --as <p> --label <l> --title <t> --quote <q> --source <s>
-//                      [--body <new text>] [--supersedes <id>] [--evidence <e>]... [--trust untrusted --founder-approved]
+//                      [--body <new text>] [--aliases "a, b"] [--supersedes <id>] [--evidence <e>]... [--trust untrusted --founder-approved]
 //   node runtime/cli.mjs pending --as <founder>
 //   node runtime/cli.mjs approve --as <founder> <id>...
 //   node runtime/cli.mjs digest --as <founder> [--out <file>] (pending batch, full text; --out writes mode 600, prints a count)
@@ -44,7 +44,7 @@ import { createCompanyStore } from './store.mjs';
 //   node runtime/cli.mjs eval --as <p> --file tasks.json [--min <recall>] [--role <r>] [--record]
 //   node runtime/cli.mjs eval-trend --as <founder> [--role <r>] [--out <file>]
 //   node runtime/cli.mjs record add|update|list measure|receipt --as <p>   (writes: founder only)
-//   node runtime/cli.mjs mcp --as <p>                         (stdio MCP, read-only)
+//   node runtime/cli.mjs mcp --as <p> [--untrusted]                         (stdio MCP; --untrusted stamps every cb_propose untrusted)
 
 export async function addIdea(store, options) {
   const statement = required(options.statement, 'statement');
@@ -320,6 +320,7 @@ export async function executeMemoryCommand(group, rest, flags, ctx) {
           source: flags.source,
           owner: flags.owner,
           summary: flags.summary,
+          aliases: typeof flags.aliases === 'string' ? flags.aliases : undefined,
           body: typeof flags.body === 'string' ? flags.body : undefined,
           supersedes: flags.supersedes,
           evidence: flags.evidence === true ? undefined : flags.evidence,
@@ -361,8 +362,16 @@ export async function executeMemoryCommand(group, rest, flags, ctx) {
 async function maybeWrite(value, flags, count) {
   if (typeof flags.out !== 'string') return value;
   const file = path.resolve(flags.out);
-  await fs.writeFile(file, `${format(value)}\n`, { mode: 0o600 });
-  await fs.chmod(file, 0o600);
+  // Never follow a planted symlink: the digest holds founder-level text.
+  const existing = await fs.lstat(file).catch(() => null);
+  if (existing?.isSymbolicLink()) throw new Error(`refusing to write the digest through a symlink: ${file}`);
+  const handle = await fs.open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+  try {
+    await handle.writeFile(`${format(value)}\n`);
+    await handle.chmod(0o600);
+  } finally {
+    await handle.close();
+  }
   return { written: file, count };
 }
 
@@ -407,7 +416,7 @@ async function main() {
   };
 
   if (group === 'mcp') {
-    await serve(ctx, principalFrom(flags));
+    await serve(ctx, principalFrom(flags), process.stdin, process.stdout, { untrusted: flags.untrusted === true });
     return;
   }
   const memory = await executeMemoryCommand(group, [verb, ...rest].filter((x) => x !== undefined), flags, ctx);
