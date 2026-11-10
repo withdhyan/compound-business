@@ -3,7 +3,9 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { approve, listPending, propose } from './curation.mjs';
+import { approve, digest, listPending, propose } from './curation.mjs';
+import { evalTrend, recordEval } from './evals.mjs';
+import { addRecord, countedTotal, listLedger, updateRecord } from './ledger.mjs';
 import { serve } from './mcp.mjs';
 import { buildIndex, citeCheck, getItems, runEval, showItem } from './memory.mjs';
 import { mineSources } from './mine.mjs';
@@ -34,9 +36,13 @@ import { createCompanyStore } from './store.mjs';
 //   node runtime/cli.mjs show --as <p> <id>
 //   node runtime/cli.mjs cite-check --as <p> <file|->        (exit 1 on a bad cite)
 //   node runtime/cli.mjs propose --as <p> --label <l> --title <t> --quote <q> --source <s>
+//                      [--body <new text>] [--supersedes <id>] [--evidence <e>]... [--trust untrusted --founder-approved]
 //   node runtime/cli.mjs pending --as <founder>
 //   node runtime/cli.mjs approve --as <founder> <id>...
-//   node runtime/cli.mjs eval --as <p> --file tasks.json [--min <recall>]
+//   node runtime/cli.mjs digest --as <founder>               (pending batch: label, source, quote, change)
+//   node runtime/cli.mjs eval --as <p> --file tasks.json [--min <recall>] [--role <r>] [--record]
+//   node runtime/cli.mjs eval-trend --as <founder> [--role <r>]
+//   node runtime/cli.mjs record add|update|list measure|receipt
 //   node runtime/cli.mjs mcp --as <p>                         (stdio MCP, read-only)
 
 export async function addIdea(store, options) {
@@ -313,22 +319,47 @@ export async function executeMemoryCommand(group, rest, flags, ctx) {
           source: flags.source,
           owner: flags.owner,
           summary: flags.summary,
+          body: typeof flags.body === 'string' ? flags.body : undefined,
+          supersedes: flags.supersedes,
+          evidence: flags.evidence === true ? undefined : flags.evidence,
+          trust: flags.trust,
+          founderApproved: flags['founder-approved'] === true,
         }),
         exitCode: 0,
       };
     case 'pending':
       return { value: await listPending(ctx, as()), exitCode: 0 };
+    case 'digest':
+      return { value: await digest(ctx, as()), exitCode: 0 };
     case 'approve':
       return { value: await approve(ctx, as(), rest), exitCode: 0 };
+    case 'eval-trend':
+      return { value: await evalTrend(ctx, as(), { role: typeof flags.role === 'string' ? flags.role : undefined }), exitCode: 0 };
+    case 'record':
+      return { value: await executeRecordCommand(rest, flags, ctx), exitCode: 0 };
     case 'eval': {
       const tasks = await readJsonFile(flags.file, 'tasks');
       const report = await runEval(ctx, as(), Array.isArray(tasks) ? tasks : tasks.tasks);
+      if (flags.record === true) await recordEval(ctx, report, { role: typeof flags.role === 'string' ? flags.role : undefined });
       const min = flags.min === undefined ? 0 : Number(flags.min);
       return { value: report, exitCode: report.recall >= min ? 0 : 1 };
     }
     default:
       return null;
   }
+}
+
+// Ledger records (measures, receipts): trusted-operator writes, like `idea`.
+async function executeRecordCommand([verb, target], flags, ctx) {
+  if (verb === 'add') {
+    return addRecord(ctx.store, target, await readJsonFile(flags.file, 'record'), { label: flags.label });
+  }
+  if (verb === 'update') return updateRecord(ctx.store, target, await readJsonFile(flags.file, 'record'));
+  if (verb === 'list') {
+    const records = await listLedger(ctx.store, target);
+    return { kind: target, records, ...(target === 'receipt' ? { totals: countedTotal(records) } : {}) };
+  }
+  throw new Error('usage: record add <measure|receipt> --file f.json --label <l> | record update <id> --file f.json | record list <measure|receipt>');
 }
 
 async function readStdin() {
@@ -414,7 +445,7 @@ async function main() {
   }
 
   throw new Error(
-    'usage: cli.mjs [--data <dir>] idea add|list|show|amplify|evaluate|decide|advance | mine | index|get|show|cite-check|propose|pending|approve|eval|mcp --as <principal>',
+    'usage: cli.mjs [--data <dir>] idea add|list|show|amplify|evaluate|decide|advance | mine | index|get|show|cite-check|propose|pending|digest|approve|eval|eval-trend|mcp --as <principal> | record add|update|list <principal>',
   );
 }
 
@@ -441,6 +472,25 @@ function formatMemory(value) {
     return [...lines, `recall ${value.recall.toFixed(3)} (${value.hits}/${value.expected})`].join('\n');
   }
   if (value.record) return `${value.id}  ${value.label}  ${value.path}\n${JSON.stringify(value.record, null, 2)}`;
+  if (value.rows && value.count !== undefined) {
+    if (value.count === 0) return 'nothing pending';
+    const lines = value.rows.map((r) => [
+      `${r.id}  ${r.label} · ${r.source} · "${r.quote}"${r.trust === 'untrusted' ? '  [UNTRUSTED, founder-vouched]' : ''}`,
+      `  change: ${r.change}`,
+      ...r.evidence.map((e) => `  evidence: ${e}`),
+    ].join('\n'));
+    return [...lines, `approve: cb approve --as ${value.principal} <id>...`].join('\n');
+  }
+  if (value.series) {
+    const lines = value.series.map((r) => `${r.key.padEnd(14)} runs ${r.runs}  week-0 ${r.first.recall.toFixed(2)} -> now ${r.last.recall.toFixed(2)}  (${r.delta >= 0 ? '+' : ''}${r.delta.toFixed(2)})`);
+    return lines.length ? lines.join('\n') : '(no eval history)';
+  }
+  if (value.records) {
+    const lines = value.records.map((r) => `${r.id}  ${r.label ?? '-'}  ${r.instrument ?? r.counterparty}${r.counted !== undefined ? (r.counted ? '  COUNTED' : '  not counted') : r.reportable ? '  reportable' : '  not reportable'}`);
+    const t = value.totals ? [`counted ${value.totals.counted}  not counted ${value.totals.uncounted}`] : [];
+    return [...lines, ...t].join('\n') || '(none)';
+  }
+  if (value.counterparty || value.instrument) return `${value.id}  ${value.label ?? '-'}  ${value.counterparty ?? value.instrument}`;
   if (value.approved) return `approved: ${value.approved.join(' ')}`;
   return null;
 }

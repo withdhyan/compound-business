@@ -24,10 +24,12 @@ const RECORD_KINDS = Object.freeze([
   'BusinessMetric',
   'BusinessUnit',
   'BusinessStage',
+  'BusinessMeasure',
+  'BusinessReceipt',
 ]);
 const MAX_FILE_BYTES = 1024 * 1024;
 const FILE_ID = /^mem_[0-9a-f]{16}$/;
-const CITATION = /\b(?:(?:bunit|bdec|bmet|brule|bstage|bidea)_[0-9a-f]{24}|mem_[0-9a-f]{16})\b/g;
+const CITATION = /\b(?:(?:bunit|bdec|bmet|brule|bstage|bidea|bmeas|brcpt)_[0-9a-f]{24}|mem_[0-9a-f]{16})\b/g;
 const STOPWORDS = new Set(['the', 'a', 'an', 'of', 'to', 'and', 'or', 'in', 'on', 'for', 'is', 'it', 'we', 'do']);
 
 // ---- collection -------------------------------------------------------------
@@ -40,7 +42,7 @@ async function collect(ctx) {
   }
   const files = [];
   for (const dir of ctx.memoryDirs ?? []) await scan(path.resolve(dir), path.basename(path.resolve(dir)), '', files, warnings);
-  items.push(...resolveFileLinks(files));
+  items.push(...resolveFileLinks(files, warnings));
 
   // Duplicate ids are resolved per principal, after the visibility filter
   // (see visibleTo): an item a reader cannot see must not change what they can.
@@ -52,8 +54,8 @@ async function collect(ctx) {
 
 function recordItem(record) {
   const title =
-    record.statement ?? record.title ?? record.name ?? record.stage ?? record.id;
-  const summary = firstString(record.rationale, record.goal, record.definition, record.decisionNote, record.pruneReason) ?? '';
+    record.statement ?? record.title ?? record.name ?? record.instrument ?? record.counterparty ?? record.stage ?? record.id;
+  const summary = firstString(record.rationale, record.goal, record.definition, record.threshold, record.what, record.decisionNote, record.pruneReason) ?? '';
   return {
     id: record.id,
     source: 'record',
@@ -120,21 +122,40 @@ function fileItem(display, content, mtime) {
     summary: clip(summary, 140),
     updated: meta.updated ?? mtime.toISOString().slice(0, 10),
     supersededBy: meta['superseded-by'] ?? null,
+    supersedes: meta.supersedes ?? null,
     text: `${title}\n${body}`.toLowerCase(),
     raw: { body, display },
   };
 }
 
 // `superseded-by:` names an id or a path; resolve a path to its id.
-function resolveFileLinks(files) {
+function resolveFileLinks(files, warnings = []) {
   const byPath = new Map(files.map((item) => [item.path, item.id]));
   const byTail = new Map();
   for (const item of files) {
     const tail = item.path.split('/').slice(1).join('/');
     byTail.set(tail, byTail.has(tail) ? null : item.id);
   }
+  // `supersedes:` is honoured only from files `approve` wrote under approved/,
+  // only for a live target at the same label, and only when exactly one
+  // successor claims it. The old file is never edited.
+  const claims = new Map();
+  for (const item of files) {
+    if (!item.supersedes || item.path.split('/')[1] !== 'approved' || !FILE_ID.test(item.supersedes)) continue;
+    claims.set(item.supersedes, [...(claims.get(item.supersedes) ?? []), item]);
+  }
+  const successor = new Map();
+  for (const [target, group] of claims) {
+    const old = files.find((item) => item.id === target);
+    if (!old || old.supersededBy || group.some((item) => item.label !== old.label)) continue;
+    if (group.length > 1) {
+      warnings.push(`${target}: ${group.length} successors claim it (none applied)`);
+      continue;
+    }
+    successor.set(target, group[0].id);
+  }
   return files.map((item) => {
-    const target = item.supersededBy;
+    const target = item.supersededBy ?? successor.get(item.id);
     if (!target) return item;
     const resolved = FILE_ID.test(target) ? target : byPath.get(target) ?? byTail.get(target) ?? target;
     return { ...item, supersededBy: resolved };
@@ -143,7 +164,7 @@ function resolveFileLinks(files) {
 
 // Keys that decide access or identity. Written twice, the file is ambiguous
 // and is withheld rather than resolved to either value.
-const SECURITY_KEYS = ['label', 'id', 'owner', 'superseded-by'];
+const SECURITY_KEYS = ['label', 'id', 'owner', 'superseded-by', 'supersedes'];
 
 export function parseFrontmatter(content) {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content);
