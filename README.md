@@ -53,7 +53,21 @@ CB is a Claude Code plugin (plain-markdown skills; portable in principle to othe
 | /counsel | Privacy/compliance review — binary SHIP / FIX verdicts; can block a feature |
 | /analyst | Metrics vs. pre-committed thresholds; measured ≠ estimated ≠ assumed, loudly |
 | /retro | The compounding ceremony: audit, extract, prune |
+| /amplify | One line in, a ranked ×100 portfolio out — evaluate, amplify, decide, build |
 | /new-role | CB grows itself — new roles via skill-TDD (baseline failure → write → pressure-test → deploy) |
+
+## The runtime (engine under the roles)
+
+`runtime/` is the engine the rails above are meant to run on: a stateful
+business record world, a unit state machine for moves, a 0→100 stage machine,
+and a fail-closed authority ladder (advise → draft → reversible → irreversible,
+with stored founder grants, budget hard stops, and founder receipts for
+irreversible acts). Plain Node ESM, no dependencies, no network.
+
+Roles remain the interface; the runtime is where state, gates, and compounding
+memory live. See [`runtime/README.md`](./runtime/README.md) for the API and
+[`runtime/AGENTS.md`](./runtime/AGENTS.md) for the law. Phase A only: state and
+gates — roles are not wired to it yet.
 
 ## Non-negotiable rails (built into every role)
 

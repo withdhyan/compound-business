@@ -1,0 +1,8 @@
+{
+  "sources": [
+    { "path": "~/notes", "mode": "marker" },
+    { "path": "~/notes/ideas.md", "mode": "inbox" }
+  ],
+  "ignore": [".git", "node_modules", "data", ".DS_Store"],
+  "limit": 50
+}
