@@ -132,7 +132,7 @@ cb eval-trend --as cofounder [--role growth]    # founders only: week-0 vs lates
 cb record add measure|receipt --as cofounder --file x.json --label founders   # founder only
 cb record update <id> --as cofounder --file patch.json   # founder only; supersedes; keeps label; re-derives reportable/counted
 cb record list measure|receipt --as <p>        # only records inside p's grant; receipts print counted vs not, per currency
-cb mcp --as guest-artist [--untrusted]    # stdio MCP (--untrusted stamps proposals untrusted): cb_get, cb_show, cb_cite_check, cb_propose (pending only)
+cb mcp --as guest-artist [--untrusted]    # stdio MCP (--untrusted stamps proposals untrusted): cb_index, cb_get, cb_show, cb_cite_check, cb_propose (pending only)
 ```
 
 (`cb` is `node runtime/cli.mjs [--data <dir>]`.) Add `--json` for machine output.

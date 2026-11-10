@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline';
 
 import { propose } from './curation.mjs';
-import { citeCheck, getItems, showItem } from './memory.mjs';
+import { buildIndex, citeCheck, getItems, showItem } from './memory.mjs';
 
 // A minimal stdio MCP server (newline-delimited JSON-RPC 2.0) over the
 // read surface (get, show, cite-check) plus one write: cb_propose, which only
@@ -10,6 +10,11 @@ import { citeCheck, getItems, showItem } from './memory.mjs';
 // trust flag or a founder-approval flag, so an agent cannot widen its grant,
 // promote untrusted content, or approve anything.
 const TOOLS = [
+  {
+    name: 'cb_index',
+    description: 'List every item you may read: id, label, title, summary, updated, superseded. No bodies. Start here when the store is small (200 visible items or fewer), pick ids, then cb_show them.',
+    inputSchema: { type: 'object', properties: {} },
+  },
   {
     name: 'cb_get',
     description: 'Search the company memory within your grant. Returns matching items with ids to cite.',
@@ -46,6 +51,22 @@ const TOOLS = [
 ];
 
 async function runTool(ctx, principal, name, args = {}, launch = {}) {
+  if (name === 'cb_index') {
+    const { items } = await buildIndex(ctx, principal);
+    return {
+      count: items.length,
+      items: items.map((item) => ({
+        id: item.id,
+        label: item.label,
+        title: item.title,
+        summary: item.summary,
+        updated: item.updated,
+        superseded: item.superseded,
+        ...(item.replacement ? { replacement: item.replacement.id } : {}),
+        ...(item.trust ? { trust: item.trust } : {}),
+      })),
+    };
+  }
   if (name === 'cb_get') return getItems(ctx, principal, args.query, { limit: args.limit });
   if (name === 'cb_show') return showItem(ctx, principal, args.id);
   if (name === 'cb_cite_check') return citeCheck(ctx, principal, String(args.text ?? ''));

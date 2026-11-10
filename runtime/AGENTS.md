@@ -64,6 +64,11 @@ decisions, metrics, rules, stage, authority. Nothing here reaches the network.
 - `supersedes:` is honoured from any file under an `approved/` memory
   directory; whoever can write files there can retire an item. File access is
   outside the trust model.
+- Finding things: with 200 visible items or fewer, start with `cb_index`
+  (id, label, title, summary, updated, superseded; no bodies; the principal is
+  the launch principal and arguments cannot change it), pick ids, then
+  `cb_show` them. Larger stores: `cb_get` with 2-3 phrasings ("q1 | q2"), then
+  `cb_show`.
 - Trust model: labels are a retrieval filter, not an OS boundary. They hold
   only when agents reach memory through the MCP server (`cb mcp --as <p>`),
   with the principal fixed in the harness config, and run as an OS user with

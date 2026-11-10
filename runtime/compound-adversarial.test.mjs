@@ -383,3 +383,32 @@ test('N6 the receipt shape check rejects counted:true with a future date, even o
   const forged = { ...r, id: r.id.replace(/.$/, r.id.endsWith('0') ? '1' : '0'), dedupeKey: 'receipt:forged', paymentDate: '2099-01-01' };
   await assert.rejects(ctx.store.writeRecord(forged), /counted/);
 });
+
+// ---- cb_index ----------------------------------------------------------------
+
+test('cb_index lists only what the launch principal may read, marks superseded, carries no bodies, ignores a named principal', async () => {
+  const { ctx, role } = await setup();
+  const { handleMessage } = await import('./mcp.mjs');
+  const call = (who, args = {}) => handleMessage(ctx, who, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'cb_index', arguments: args } });
+  const out = async (who, args) => JSON.parse((await call(who, args)).result.content[0].text);
+
+  const team = await out('scribe', { principal: 'founder', as: 'founder', label: 'personal' });
+  const titles = team.items.map((i) => i.title);
+  assert.ok(titles.includes('Growth rules'));
+  assert.ok(!titles.includes('Raise strategy') && !titles.includes('Founder diary'));
+  assert.ok(team.items.every((i) => i.label === 'team' || i.label === 'public'));
+  assert.ok(!JSON.stringify(team).includes('SECRET-TERMS') && team.items.every((i) => !('body' in i) && !('snippet' in i)));
+  assert.equal(team.count, team.items.length);
+
+  const founder = await out('founder');
+  assert.ok(founder.items.some((i) => i.title === 'Raise strategy'));
+  assert.ok(founder.items.some((i) => i.title === 'Founder diary'));
+
+  const { id } = await propose(ctx, 'scribe', edit(role, { title: 'Growth rules v2' }));
+  await approve(ctx, 'founder', [id]);
+  const after = await out('scribe');
+  const old = after.items.find((i) => i.id === role.id);
+  assert.equal(old.superseded, true);
+  assert.equal(old.replacement, id);
+  assert.equal(after.items.find((i) => i.id === id).superseded, false);
+});

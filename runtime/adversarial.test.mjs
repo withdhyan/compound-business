@@ -158,7 +158,7 @@ test('C3 MCP ignores a principal smuggled in arguments; the only write tool is p
   const res = await handleMessage(ctx, 'bot', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'cb_get', arguments: { query: 'exit plan', principal: 'founder', as: 'founder' } } });
   assert.deepEqual(JSON.parse(res.result.content[0].text).results, []);
   const list = await handleMessage(ctx, 'bot', { jsonrpc: '2.0', id: 2, method: 'tools/list' });
-  assert.deepEqual(list.result.tools.map((t) => t.name).sort(), ['cb_cite_check', 'cb_get', 'cb_propose', 'cb_show']);
+  assert.deepEqual(list.result.tools.map((t) => t.name).sort(), ['cb_cite_check', 'cb_get', 'cb_index', 'cb_propose', 'cb_show']);
 });
 
 test('C4 approve and pending by a non-founder, external, or team principal are refused', async () => {
