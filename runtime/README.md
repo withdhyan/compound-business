@@ -9,7 +9,7 @@ live outside, and every one of them passes this module's gates first.
 
 | Module | Job |
 |---|---|
-| `records.mjs` | Closed record world — `BusinessUnit`, `BusinessDecision`, `BusinessMetric`, `BusinessRule`, `BusinessStage`, `AuthorityGrant`, `AuditEntry` — with builders and full shape validation |
+| `records.mjs` | Closed record world — `BusinessUnit`, `BusinessDecision`, `BusinessMetric`, `BusinessRule`, `BusinessStage`, `BusinessTrace`, `AuthorityGrant`, `AuditEntry` — with builders and full shape validation |
 | `store.mjs` | Hash-named, bitemporal JSON records under `<dataDir>/company/<kind>/`; supersede, never mutate; one live record per (kind, dedupeKey); unit identity pinned across supersession; approvals verified against stored grants |
 | `unit.mjs` | A business move is a unit: `planned → approved → running → review → shipped`, or `held` / `killed`. Review comes from a different role; irreversible units need a founder receipt |
 | `stage.mjs` | The 0→100 stage machine: each stage names its binding constraint and exit criteria; moves are +1 only; evidenced, not vibed |
@@ -18,6 +18,8 @@ live outside, and every one of them passes this module's gates first.
 | `policy.mjs` | Labels (`public < team < founders < personal`), per-principal grants, the founder list, external shares, optional stage ladder. Loaded from `<data>/policy.json` |
 | `memory.mjs` | Read side of the memory layer: index, per-task `get`, `show`, citation check, eval. Labelled markdown files plus labelled records |
 | `curation.mjs` | The curation queue: `propose` (pending, invisible) and `approve` (live) |
+| `trace.mjs` | Decision traces: a `BusinessTrace` record per proposal, appended by propose, edit, approve, reject, outcome and triage; label = max of what it references |
+| `triage.mjs` | Three-way triage of corrections (exception, test, system) and the frozen holdout eval file |
 | `mcp.mjs` | Optional stdio MCP server over get/show/cite-check, bound to one principal |
 | `evals.mjs` | Eval history (`data/evals/history.jsonl`) and the week-0 vs now trend |
 | `ledger.mjs` | Add/update/list for `BusinessMeasure` and `BusinessReceipt`; counted-money total |
@@ -132,7 +134,7 @@ cb eval-trend --as cofounder [--role growth]    # founders only: week-0 vs lates
 cb record add measure|receipt --as cofounder --file x.json --label founders   # founder only
 cb record update <id> --as cofounder --file patch.json   # founder only; supersedes; keeps label; re-derives reportable/counted
 cb record list measure|receipt --as <p>        # only records inside p's grant; receipts print counted vs not, per currency
-cb mcp --as guest-artist [--untrusted]    # stdio MCP (--untrusted stamps proposals untrusted): cb_index, cb_get, cb_show, cb_cite_check, cb_propose (pending only)
+cb mcp --as guest-artist [--untrusted]    # stdio MCP (--untrusted stamps proposals untrusted): cb_index, cb_get, cb_show, cb_cite_check, cb_propose (pending only), cb_trace_list, cb_trace_show, cb_trace_suggest
 ```
 
 (`cb` is `node runtime/cli.mjs [--data <dir>]`.) Add `--json` for machine output.
@@ -160,6 +162,37 @@ cb mcp --as guest-artist [--untrusted]    # stdio MCP (--untrusted stamps propos
 - **Retrieval.** `get` ranks with BM25 over stemmed tokens (title, alias and summary hits weigh more than body hits), plus a small built-in synonym map of generic business and research words (funder/investor/backer/patron, money/funding/capital, deck/presentation/pitch, false/untrue, and so on). Corpus statistics use only the items the reader can see. An item may carry `aliases: a, b` in its frontmatter (indexed like the title; `propose --aliases "a, b"` adds them, and the digest shows them). `get "q1 | q2 | q3"` ranks the union of several phrasings by reciprocal rank.
 - **Scorecards.** `eval --record` appends one aggregate line (time, principal, role, recall, hits, expected, task count; no query text) to `<data>/evals/history.jsonl`. `eval-trend` compares each role's first and latest run.
 - **Ledger records.** `BusinessMeasure` (instrument, partner, signed, prereg, threshold, population; `reportable` is derived: signed and preregistered) and `BusinessReceipt` (counterparty, what, amount, currency, recipientAcceptance, paymentDate, signedScope; `counted` is derived: acceptance and signed scope are memory item ids, the payment date is an ISO date not in the future). Totals are per currency. A reportable (or data-bearing) measure cannot change instrument, partner, prereg, threshold or population: a new design is a new measure. Both are labelled, retrievable with `cb get`, and corrected by supersession. Ids: `bmeas_...`, `brcpt_...`.
+
+### Decision traces and triage
+
+A correction is not a rule. Curation keeps the context instead (the pattern:
+decision traces preserve curated context so learnings are reused without
+treating every correction as a rule).
+
+- **Trace.** `propose` opens a `BusinessTrace` (`btrace_...`): subject, context item ids (the item an edit replaces plus every cited evidence id), proposal id, `edits[]`, the final decision (`approved` with the live item id, or `rejected`), `outcome`, `triage`, `suggestions`, label, created and updated. `editPending`, `approve` and `reject` append to it; each step is a successor record, so the whole history stays on disk. Identity, edits, suggestions, a decision and a triage cannot be rewritten (the store refuses). A proposal re-proposed after a rejection gets its own trace.
+- **Label.** The max of the proposal's label and the labels of everything it references. A team principal cannot read a trace that cites a founders item, and an unreadable trace looks exactly like a missing one. A pending trace is visible only to founders and its proposer (it must not leak an invisible proposal's title). Traces are not memory items: `get` and `index` do not return them.
+- **Correction** = a proposal a founder rejected or edited before approving.
+
+```bash
+cb edit --as cofounder <pending id> [--title t] [--summary s] [--body b] [--aliases "a, b"]   # founder; the change is kept on the trace
+cb reject --as cofounder <id>... [--note "why"]
+cb trace list|show|suggest|outcome ...                  # list [--untriaged], show <id>, suggest <id> exception|test|system [--note n]
+cb trace outcome <id> <text> --as cofounder             # founder only: what happened later (supersedes the trace)
+cb triage <trace> exception|test|system --as cofounder --note "the founder's words" [flags]
+cb holdout list|run --as cofounder                      # founders only
+```
+
+`cb triage` is founder-only and sets the class once:
+
+| class | effect |
+|---|---|
+| `exception` | The note is stored on the trace as context. Never a rule. |
+| `test` | Appends one frozen case to `<data>/evals/holdout.jsonl`: `--query q --expect <id>...` (a query and the item it should find) or `--draft text --verdict SHIP\|FIX\|READY\|"NOT READY"` (a draft and the verdict it should get). |
+| `system` | Queues a pending proposal (`--body`, optional `--target <item id>` to supersede a rulebook, skill or policy item, `--title`). `--note` is its quote. A founder still approves it. |
+
+`cb digest` ends with the untriaged corrections, each with the three choices and any class an agent suggested. Agents (MCP) get `cb_trace_list`, `cb_trace_show` (read-only) and `cb_trace_suggest` (a note on the trace; it sets nothing). They cannot triage, record outcomes or reach the holdout.
+
+**Eval hygiene.** Cases made by triage go to the frozen holdout, a different file from the eval history and from any `--file` task list. The retro never trains, tunes or proposes against it: it is not exposed through MCP, `cb holdout` and `cb eval-trend` are founder-only, `cb eval --file` refuses the holdout path, `cb holdout run` is never written to `history.jsonl`, and the file is append-only (a case is never edited or removed by the runtime). Why: overfitting. Rulebooks and aliases tuned until their own test set passes measure the tuning, not the memory; the alias experiment lifted recall on the queries the aliases were written for and not on queries written afterwards. A holdout stays honest only if nobody who edits the system can see it.
 
 Tests:
 

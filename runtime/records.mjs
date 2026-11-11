@@ -21,6 +21,7 @@ export const COMPANY_RECORD_KINDS = Object.freeze([
   'BusinessIdea',
   'BusinessMeasure',
   'BusinessReceipt',
+  'BusinessTrace',
   'AuthorityGrant',
   'AuditEntry',
 ]);
@@ -36,6 +37,7 @@ const KIND_PREFIX = Object.freeze({
   BusinessIdea: 'bidea',
   BusinessMeasure: 'bmeas',
   BusinessReceipt: 'brcpt',
+  BusinessTrace: 'btrace',
   AuthorityGrant: 'agrant',
   AuditEntry: 'audit',
 });
@@ -506,6 +508,106 @@ function measureBody(value) {
   };
 }
 
+// A decision trace: the curated context behind one curation decision, kept so
+// the learning can be reused without turning every correction into a rule.
+// One trace per proposal. It is superseded, never mutated: each curation step
+// (edit, approve, reject, outcome, triage, suggestion) is a successor. Its
+// label is the max of the labels it references, so a trace is never readable
+// by someone who could not read its inputs.
+export const TRACE_DECISIONS = Object.freeze(['pending', 'approved', 'rejected']);
+export const TRIAGE_CLASSES = Object.freeze(['exception', 'test', 'system']);
+const TRACE_REF = /^(?:(?:bunit|bdec|bmet|brule|bstage|bidea|bmeas|brcpt)_[0-9a-f]{24}|mem_[0-9a-f]{16})$/;
+const MAX_TRACE_EDITS = 50;
+const MAX_TRACE_SUGGESTIONS = 20;
+
+export function buildBusinessTrace(input, now) {
+  const value = requireInput(input, 'BusinessTrace');
+  const body = traceBody(value);
+  return envelope({
+    kind: 'BusinessTrace',
+    dedupeKey: value.dedupeKey ?? traceKey(body.proposalId),
+    value,
+    now,
+    body,
+  });
+}
+
+// One proposal id can be proposed again after a rejection; each round is its
+// own trace (seq 0, 1, ...).
+export function traceKey(proposalId, seq = 0) {
+  return `trace:${requiredString(proposalId, 'proposalId')}:${seq}`;
+}
+
+function traceBody(value) {
+  const label = normalizeLabel(value.label);
+  const contextIds = [...new Set((value.contextIds ?? []).map((id) => requiredString(id, 'context id')))];
+  for (const id of contextIds) if (!TRACE_REF.test(id)) throw new Error(`invalid trace context id: ${id}`);
+  const proposalId = requiredString(value.proposalId, 'proposalId');
+  if (!/^mem_[0-9a-f]{16}$/.test(proposalId)) throw new Error(`invalid trace proposal id: ${proposalId}`);
+  const edits = value.edits ?? [];
+  if (!Array.isArray(edits) || edits.length > MAX_TRACE_EDITS) throw new Error(`trace edits: an array of at most ${MAX_TRACE_EDITS}`);
+  const suggestions = value.suggestions ?? [];
+  if (!Array.isArray(suggestions) || suggestions.length > MAX_TRACE_SUGGESTIONS) {
+    throw new Error(`trace suggestions: an array of at most ${MAX_TRACE_SUGGESTIONS}`);
+  }
+  const decision = value.decision ?? 'pending';
+  if (!TRACE_DECISIONS.includes(decision)) throw new Error(`invalid trace decision: ${decision}`);
+  const decisionId = optionalString(value.decisionId) ?? null;
+  if (decision === 'approved' ? decisionId !== proposalId : decisionId !== null) {
+    throw new Error('trace decisionId is the approved item id, and only an approved trace has one');
+  }
+  if (decision !== 'pending') {
+    requiredString(value.decidedBy, 'decidedBy');
+    if (Number.isNaN(Date.parse(requiredString(value.decidedAt, 'decidedAt')))) throw new Error('trace decidedAt must be an ISO timestamp');
+  }
+  let triage = null;
+  if (value.triage !== undefined && value.triage !== null) {
+    if (!isPlainObject(value.triage) || !TRIAGE_CLASSES.includes(value.triage.class)) {
+      throw new Error(`triage class must be one of: ${TRIAGE_CLASSES.join(', ')}`);
+    }
+    triage = {
+      class: value.triage.class,
+      by: requiredString(value.triage.by, 'triage.by'),
+      at: requiredString(value.triage.at, 'triage.at'),
+      note: optionalString(value.triage.note) ?? null,
+      ...(optionalString(value.triage.proposalId) ? { proposalId: value.triage.proposalId } : {}),
+      ...(optionalString(value.triage.caseId) ? { caseId: value.triage.caseId } : {}),
+    };
+    if (triage.class !== 'test' && !triage.note) throw new Error(`a ${triage.class} triage needs a note`);
+  }
+  return {
+    subject: requiredString(value.subject, 'subject'),
+    contextIds,
+    proposalId,
+    proposedBy: requiredString(value.proposedBy, 'proposedBy'),
+    ...(optionalString(value.owner) ? { owner: optionalString(value.owner) } : {}),
+    edits: edits.map((edit, index) => {
+      if (!isPlainObject(edit)) throw new Error(`trace edit ${index + 1} must be an object`);
+      return {
+        at: requiredString(edit.at, 'edit.at'),
+        by: requiredString(edit.by, 'edit.by'),
+        field: requiredString(edit.field, 'edit.field'),
+        from: String(edit.from ?? ''),
+        to: String(edit.to ?? ''),
+      };
+    }),
+    decision,
+    decisionId,
+    decidedBy: optionalString(value.decidedBy) ?? null,
+    decidedAt: optionalString(value.decidedAt) ?? null,
+    decisionNote: optionalString(value.decisionNote) ?? null,
+    outcome: optionalString(value.outcome) ?? null,
+    triage,
+    suggestions: suggestions.map((entry, index) => {
+      if (!isPlainObject(entry) || !TRIAGE_CLASSES.includes(entry.class)) {
+        throw new Error(`trace suggestion ${index + 1} needs a class of: ${TRIAGE_CLASSES.join(', ')}`);
+      }
+      return { class: entry.class, by: requiredString(entry.by, 'suggestion.by'), at: requiredString(entry.at, 'suggestion.at'), note: optionalString(entry.note) ?? null };
+    }),
+    label,
+  };
+}
+
 // The receipt gate. Money is counted only when the recipient has accepted in
 // writing, a payment date exists and a signed scope exists. `counted` is
 // derived and re-checked on every write, so a record cannot claim it.
@@ -882,6 +984,10 @@ function assertKindBody(record, policy) {
       if (record.counted !== false && !(record.counted === true && fmt.recipientAcceptance && fmt.signedScope && dated)) {
         throw new Error('receipt counted needs recipient acceptance, payment date and signed scope');
       }
+      break;
+    }
+    case 'BusinessTrace': {
+      traceBody(record);
       break;
     }
     case 'AuthorityGrant': {

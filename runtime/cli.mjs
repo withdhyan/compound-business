@@ -3,13 +3,15 @@ import { promises as fs, constants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { approve, digest, listPending, propose, reject } from './curation.mjs';
+import { approve, digest, editPending, listPending, propose, reject } from './curation.mjs';
 import { evalTrend, recordEval } from './evals.mjs';
 import { addRecord, guardLedgerWrite, listLedgerFor, updateRecord } from './ledger.mjs';
 import { serve } from './mcp.mjs';
 import { buildIndex, citeCheck, getItems, runEval, showItem } from './memory.mjs';
 import { mineSources } from './mine.mjs';
 import { loadPolicy } from './policy.mjs';
+import { isHoldoutPath, listHoldout, runHoldout, triage } from './triage.mjs';
+import { listTraces, recordOutcome, showTrace, suggestTriage } from './trace.mjs';
 import {
   buildBusinessIdea,
   normalizeIdeaStatus,
@@ -40,7 +42,14 @@ import { createCompanyStore } from './store.mjs';
 //   node runtime/cli.mjs pending --as <founder>
 //   node runtime/cli.mjs approve --as <founder> <id>...
 //   node runtime/cli.mjs digest --as <founder> [--out <file>] (pending batch, full text; --out writes mode 600, prints a count)
-//   node runtime/cli.mjs reject --as <founder> <id>... | --stale
+//   node runtime/cli.mjs reject --as <founder> <id>... | --stale [--note <why>]
+//   node runtime/cli.mjs edit --as <founder> <pending id> [--title t] [--summary s] [--body b] [--aliases "a, b"]
+//   node runtime/cli.mjs trace list [--untriaged] | show <id> | suggest <id> exception|test|system [--note n] --as <p>
+//   node runtime/cli.mjs trace outcome <id> <text> --as <founder>
+//   node runtime/cli.mjs triage <trace> exception|test|system --as <founder> --note <words>
+//                      [test: --query q --expect <id>... | --draft text --verdict SHIP|FIX|READY|"NOT READY"]
+//                      [system: --body <text> [--target <item id to supersede>] [--title t]]
+//   node runtime/cli.mjs holdout list|run --as <founder>        (the frozen eval; founders only)
 //   node runtime/cli.mjs eval --as <p> --file tasks.json [--min <recall>] [--role <r>] [--record]
 //   node runtime/cli.mjs eval-trend --as <founder> [--role <r>] [--out <file>]
 //   node runtime/cli.mjs record add|update|list measure|receipt --as <p>   (writes: founder only)
@@ -336,7 +345,43 @@ export async function executeMemoryCommand(group, rest, flags, ctx) {
       return { value: await maybeWrite(value, flags, value.count), exitCode: 0 };
     }
     case 'reject':
-      return { value: await reject(ctx, as(), rest, { stale: flags.stale === true }), exitCode: 0 };
+      return { value: await reject(ctx, as(), rest, { stale: flags.stale === true, note: typeof flags.note === 'string' ? flags.note : undefined }), exitCode: 0 };
+    case 'edit':
+      return {
+        value: await editPending(ctx, as(), rest[0], {
+          title: flags.title, summary: flags.summary, body: flags.body, aliases: flags.aliases,
+        }),
+        exitCode: 0,
+      };
+    case 'trace': {
+      const [verb, id, ...words] = rest;
+      if (verb === 'list') return { value: await listTraces(ctx, as(), { untriaged: flags.untriaged === true }), exitCode: 0 };
+      if (verb === 'show') return { value: await showTrace(ctx, as(), id), exitCode: 0 };
+      if (verb === 'outcome') return { value: await recordOutcome(ctx, as(), id, words.join(' ')), exitCode: 0 };
+      if (verb === 'suggest') {
+        return { value: await suggestTriage(ctx, as(), id, words[0], typeof flags.note === 'string' ? flags.note : undefined), exitCode: 0 };
+      }
+      throw new Error('usage: trace list [--untriaged] | show <id> | suggest <id> <class> | outcome <id> <text> --as <p>');
+    }
+    case 'triage':
+      return {
+        value: await triage(ctx, as(), rest[0], rest[1], {
+          note: typeof flags.note === 'string' ? flags.note : undefined,
+          query: typeof flags.query === 'string' ? flags.query : undefined,
+          expect: [flags.expect].flat().filter((entry) => typeof entry === 'string'),
+          draft: typeof flags.draft === 'string' ? flags.draft : undefined,
+          verdict: typeof flags.verdict === 'string' ? flags.verdict : undefined,
+          target: typeof flags.target === 'string' ? flags.target : undefined,
+          body: typeof flags.body === 'string' ? flags.body : undefined,
+          title: typeof flags.title === 'string' ? flags.title : undefined,
+        }),
+        exitCode: 0,
+      };
+    case 'holdout': {
+      if (rest[0] === 'run') return { value: await runHoldout(ctx, as()), exitCode: 0 };
+      if (rest[0] === 'list') return { value: await listHoldout(ctx, as()), exitCode: 0 };
+      throw new Error('usage: holdout list|run --as <founder>');
+    }
     case 'approve':
       return { value: await approve(ctx, as(), rest), exitCode: 0 };
     case 'eval-trend': {
@@ -346,6 +391,8 @@ export async function executeMemoryCommand(group, rest, flags, ctx) {
     case 'record':
       return { value: await executeRecordCommand(rest, flags, ctx, as()), exitCode: 0 };
     case 'eval': {
+      // The holdout is never an eval input: nothing trains or tunes on it.
+      if (typeof flags.file === 'string' && isHoldoutPath(ctx, flags.file)) throw new Error('the frozen holdout is not an eval file (use `cb holdout run`)');
       const tasks = await readJsonFile(flags.file, 'tasks');
       const report = await runEval(ctx, as(), Array.isArray(tasks) ? tasks : tasks.tasks);
       if (flags.record === true) await recordEval(ctx, report, { role: typeof flags.role === 'string' ? flags.role : undefined });
@@ -478,7 +525,7 @@ async function main() {
   }
 
   throw new Error(
-    'usage: cli.mjs [--data <dir>] idea add|list|show|amplify|evaluate|decide|advance | mine | index|get|show|cite-check|propose|pending|digest|reject|approve|eval|eval-trend|mcp --as <principal> | record add|update|list <principal>',
+    'usage: cli.mjs [--data <dir>] idea add|list|show|amplify|evaluate|decide|advance | mine | index|get|show|cite-check|propose|pending|digest|reject|edit|trace|triage|holdout|approve|eval|eval-trend|mcp --as <principal> | record add|update|list <principal>',
   );
 }
 
@@ -508,7 +555,7 @@ function formatMemory(value) {
   if (value.written) return `${value.count} entries written to ${value.written} (mode 600)`;
   if (value.rejected) return `rejected: ${value.rejected.join(' ') || '(none)'}`;
   if (value.rows && value.count !== undefined) {
-    if (value.count === 0) return 'nothing pending';
+    if (value.count === 0 && !value.untriagedCount) return 'nothing pending';
     const lines = value.rows.map((r) => [
       `${r.id}  ${r.label} · ${r.source}${r.writeDown ? `  [WRITE-DOWN: proposer ${r.proposedBy} holds ${r.proposerGrant}]` : ''}${r.trust === 'untrusted' ? '  [UNTRUSTED, founder-vouched]' : ''}`,
       `  quote: "${r.quote}"`,
@@ -517,8 +564,40 @@ function formatMemory(value) {
       ...(r.owner ? [`  owner: ${r.owner}`] : []),
       ...r.evidence.map((e) => `  evidence: ${e}`),
     ].join('\n'));
-    return [...lines, `approve: cb approve --as ${value.principal} <id>...   reject: cb reject --as ${value.principal} <id>...`].join('\n');
+    const corrections = (value.untriaged ?? []).map((t) => [
+      `${t.id}  ${t.label} · ${t.how}${t.by ? ` by ${t.by}` : ''}  "${t.subject}"`,
+      ...(t.note ? [`  why: ${t.note}`] : []),
+      ...t.edits.map((e) => `  edit ${e}`),
+      ...t.suggestions.map((g) => `  suggested by ${g.by}: ${g.class}`),
+      `  triage: cb triage --as ${value.principal} ${t.id} exception|test|system --note "..."`,
+    ].join('\n'));
+    return [
+      ...(lines.length ? lines : ['nothing pending']),
+      `approve: cb approve --as ${value.principal} <id>...   reject: cb reject --as ${value.principal} <id>...`,
+      ...(corrections.length ? [`UNTRIAGED CORRECTIONS (${corrections.length}): exception = context only, test = frozen eval case, system = proposal to change a rulebook/skill/policy item`, ...corrections] : []),
+    ].join('\n');
   }
+  if (value.proposalId && value.subject) {
+    return [
+      `${value.id}  ${value.label} · ${value.decision}${value.triage ? ` · triage: ${value.triage.class}` : value.isCorrection ? ' · untriaged correction' : ''}`,
+      `subject: ${value.subject}`,
+      `proposal: ${value.proposalId} by ${value.proposedBy}`,
+      ...(value.contextIds.length ? [`context: ${value.contextIds.join(' ')}`] : []),
+      ...value.edits.map((e) => `edit ${e.field} by ${e.by}: "${e.from}" -> "${e.to}"`),
+      ...(value.decidedBy ? [`${value.decision} by ${value.decidedBy}${value.decisionId ? ` -> ${value.decisionId}` : ''}${value.decisionNote ? `: ${value.decisionNote}` : ''}`] : []),
+      ...(value.outcome ? [`outcome: ${value.outcome}`] : []),
+      ...(value.triage ? [`triage ${value.triage.class} by ${value.triage.by}: ${value.triage.note ?? ''}${value.triage.proposalId ? ` -> proposal ${value.triage.proposalId}` : ''}${value.triage.caseId ? ` -> holdout ${value.triage.caseId}` : ''}`] : []),
+      ...value.suggestions.map((g) => `suggested ${g.class} by ${g.by}${g.note ? `: ${g.note}` : ''}`),
+    ].join('\n');
+  }
+  if (value.traces) {
+    return value.traces.map((t) => `${t.id}  ${t.label} · ${t.decision}${t.triage ? ` · ${t.triage.class}` : t.isCorrection ? ' · untriaged correction' : ''}  "${t.subject}"${t.outcome ? `\n  outcome: ${t.outcome}` : ''}`).join('\n') || '(no traces in your grant)';
+  }
+  if (value.cases) return value.cases.map((c) => `${c.id}  ${c.label}  ${JSON.stringify(c.case)}`).join('\n') || '(empty holdout)';
+  if (value.queryCases !== undefined) {
+    return `holdout: ${value.queryCases} query cases${value.report ? `, recall ${value.report.recall.toFixed(3)} (${value.report.hits}/${value.report.expected})` : ''}, ${value.draftCases} draft cases (for the critic, not run)`;
+  }
+  if (value.edited) return `edited: ${value.edited} (${value.fields.join(', ')})`;
   if (value.series) {
     const lines = value.series.map((r) => `${r.key.padEnd(24)} runs ${r.runs}  week-0 ${r.first.recall.toFixed(2)} -> now ${r.last.recall.toFixed(2)}  (${r.delta >= 0 ? '+' : ''}${r.delta.toFixed(2)})`);
     return lines.length ? lines.join('\n') : '(no eval history)';

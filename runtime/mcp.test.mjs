@@ -24,13 +24,13 @@ async function ctx() {
 const call = (name, args, id = 1) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
 const text = (response) => JSON.parse(response.result.content[0].text);
 
-test('initialize and tools/list expose four read tools and one propose tool', async () => {
+test('initialize and tools/list expose the read tools, the trace tools and one propose tool', async () => {
   const c = await ctx();
   const init = await handleMessage(c, 'guest-artist', { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
   assert.equal(init.result.serverInfo.name, 'cb');
   assert.ok(init.result.capabilities.tools);
   const list = await handleMessage(c, 'guest-artist', { jsonrpc: '2.0', id: 2, method: 'tools/list' });
-  assert.deepEqual(list.result.tools.map((tool) => tool.name).sort(), ['cb_cite_check', 'cb_get', 'cb_index', 'cb_propose', 'cb_show']);
+  assert.deepEqual(list.result.tools.map((tool) => tool.name).sort(), ['cb_cite_check', 'cb_get', 'cb_index', 'cb_propose', 'cb_show', 'cb_trace_list', 'cb_trace_show', 'cb_trace_suggest']);
   assert.equal(await handleMessage(c, 'guest-artist', { jsonrpc: '2.0', method: 'notifications/initialized' }), null);
 });
 

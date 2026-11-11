@@ -67,24 +67,29 @@ export class CompanyStore {
     this.policy = options.policy ?? DEFAULT_POLICY;
   }
 
-  async writeRecord(record) {
-    return serializeByDataDir(this.dataDir, async () => {
-      const value = assertCompanyRecordShape(record, this.policy);
-      if (value.supersedes) {
-        throw new Error('successors go through supersedeRecord');
-      }
-      if (value.kind === 'BusinessUnit' && value.state !== 'planned') {
-        throw new Error('a first unit record must be planned');
-      }
-      const live = await this.liveRecords(value.kind);
-      if (live.some((candidate) => candidate.dedupeKey === value.dedupeKey)) {
-        throw new Error(
-          `a live ${value.kind} already exists for ${value.dedupeKey}; supersede it instead`,
-        );
-      }
-      await this.#writeFile(value);
-      return value;
-    });
+  // The *Now variants skip the per-dataDir queue: only a caller that already
+  // holds it (curation, which writes a trace inside its own critical section)
+  // may use them. Everyone else goes through writeRecord / supersedeRecord.
+  writeRecord(record) {
+    return serializeByDataDir(this.dataDir, () => this.writeRecordNow(record));
+  }
+
+  async writeRecordNow(record) {
+    const value = assertCompanyRecordShape(record, this.policy);
+    if (value.supersedes) {
+      throw new Error('successors go through supersedeRecord');
+    }
+    if (value.kind === 'BusinessUnit' && value.state !== 'planned') {
+      throw new Error('a first unit record must be planned');
+    }
+    const live = await this.liveRecords(value.kind);
+    if (live.some((candidate) => candidate.dedupeKey === value.dedupeKey)) {
+      throw new Error(
+        `a live ${value.kind} already exists for ${value.dedupeKey}; supersede it instead`,
+      );
+    }
+    await this.#writeFile(value);
+    return value;
   }
 
   async readRecord(id) {
@@ -133,134 +138,137 @@ export class CompanyStore {
     return (await this.listRecords(kind)).filter(isLiveRecord);
   }
 
-  async supersedeRecord(predecessorId, successor) {
-    return serializeByDataDir(this.dataDir, async () => {
-      const predecessor = await this.readRecord(predecessorId);
-      if (!predecessor) {
-        throw new Error(`no company record: ${predecessorId}`);
-      }
-      if (!isLiveRecord(predecessor)) {
-        throw new Error(`company record is not live: ${predecessorId}`);
-      }
-      const next = assertCompanyRecordShape(successor, this.policy);
-      if (next.kind !== predecessor.kind) {
-        throw new Error('a successor must keep the predecessor kind');
-      }
-      if (next.dedupeKey !== predecessor.dedupeKey) {
-        throw new Error('a successor must keep the predecessor dedupeKey');
-      }
-      if (next.supersedes !== predecessor.id) {
-        throw new Error('successor.supersedes must name the predecessor');
-      }
-      if (next.id === predecessor.id) {
-        throw new Error('a successor cannot reuse the predecessor id');
-      }
-      if (!isLiveRecord(next)) {
-        throw new Error('a successor must be live');
-      }
-      if (Date.parse(next.validFrom) <= Date.parse(predecessor.validFrom)) {
-        throw new Error('successor validFrom must be after the predecessor validFrom');
-      }
-      // A label is a one-way door: a successor may add a label to a legacy
-      // unlabelled record, never change or drop one (that would launder access).
-      if (predecessor.label !== undefined && next.label !== predecessor.label) {
-        throw new Error('a successor cannot change label');
-      }
-      // A measure's design is pinned once it is reportable or has data: a
-      // changed threshold, prereg, instrument, partner or population is a new
-      // measure, never an edit (no post-hoc goalposts).
-      if (next.kind === 'BusinessMeasure' && (predecessor.reportable || predecessor.data)) {
-        for (const field of ['instrument', 'partner', 'prereg', 'threshold', 'population']) {
-          if (next[field] !== predecessor[field]) {
-            throw new Error(`a reportable or data-bearing measure cannot change ${field}; register a new measure`);
-          }
+  supersedeRecord(predecessorId, successor) {
+    return serializeByDataDir(this.dataDir, () => this.supersedeRecordNow(predecessorId, successor));
+  }
+
+  async supersedeRecordNow(predecessorId, successor) {
+    const predecessor = await this.readRecord(predecessorId);
+    if (!predecessor) {
+      throw new Error(`no company record: ${predecessorId}`);
+    }
+    if (!isLiveRecord(predecessor)) {
+      throw new Error(`company record is not live: ${predecessorId}`);
+    }
+    const next = assertCompanyRecordShape(successor, this.policy);
+    if (next.kind !== predecessor.kind) {
+      throw new Error('a successor must keep the predecessor kind');
+    }
+    if (next.dedupeKey !== predecessor.dedupeKey) {
+      throw new Error('a successor must keep the predecessor dedupeKey');
+    }
+    if (next.supersedes !== predecessor.id) {
+      throw new Error('successor.supersedes must name the predecessor');
+    }
+    if (next.id === predecessor.id) {
+      throw new Error('a successor cannot reuse the predecessor id');
+    }
+    if (!isLiveRecord(next)) {
+      throw new Error('a successor must be live');
+    }
+    if (Date.parse(next.validFrom) <= Date.parse(predecessor.validFrom)) {
+      throw new Error('successor validFrom must be after the predecessor validFrom');
+    }
+    // A label is a one-way door: a successor may add a label to a legacy
+    // unlabelled record, never change or drop one (that would launder access).
+    if (predecessor.label !== undefined && next.label !== predecessor.label) {
+      throw new Error('a successor cannot change label');
+    }
+    // A measure's design is pinned once it is reportable or has data: a
+    // changed threshold, prereg, instrument, partner or population is a new
+    // measure, never an edit (no post-hoc goalposts).
+    if (next.kind === 'BusinessMeasure' && (predecessor.reportable || predecessor.data)) {
+      for (const field of ['instrument', 'partner', 'prereg', 'threshold', 'population']) {
+        if (next[field] !== predecessor[field]) {
+          throw new Error(`a reportable or data-bearing measure cannot change ${field}; register a new measure`);
         }
       }
-      if (next.kind === 'BusinessUnit') {
-        const allowed = UNIT_TRANSITIONS[predecessor.state] ?? [];
-        if (!allowed.includes(next.state)) {
-          throw new Error(`unit history refuses ${predecessor.state} → ${next.state}`);
+    }
+    if (next.kind === 'BusinessUnit') {
+      const allowed = UNIT_TRANSITIONS[predecessor.state] ?? [];
+      if (!allowed.includes(next.state)) {
+        throw new Error(`unit history refuses ${predecessor.state} → ${next.state}`);
+      }
+      for (const field of [
+        'title',
+        'stage',
+        'goal',
+        'evidence',
+        'verification',
+        'killCriterion',
+        'ownerRole',
+        'reviewRole',
+        'authorityClass',
+      ]) {
+        if (JSON.stringify(next[field]) !== JSON.stringify(predecessor[field])) {
+          throw new Error(`a unit successor cannot change ${field}`);
         }
-        for (const field of [
-          'title',
-          'stage',
-          'goal',
-          'evidence',
-          'verification',
-          'killCriterion',
-          'ownerRole',
-          'reviewRole',
-          'authorityClass',
-        ]) {
-          if (JSON.stringify(next[field]) !== JSON.stringify(predecessor[field])) {
-            throw new Error(`a unit successor cannot change ${field}`);
-          }
-        }
-        if ((next.actionScope ?? null) !== (predecessor.actionScope ?? null)) {
-          throw new Error('a unit successor cannot change actionScope');
+      }
+      if ((next.actionScope ?? null) !== (predecessor.actionScope ?? null)) {
+        throw new Error('a unit successor cannot change actionScope');
+      }
+      if (
+        next.state === 'approved' &&
+        (next.authorityClass === 'reversible' || next.authorityClass === 'irreversible')
+      ) {
+        const grant = await this.readRecord(requiredString(next.grantId, 'grantId'));
+        if (!grant || grant.kind !== 'AuthorityGrant' || !isGrantLive(grant, next.validFrom, this.policy)) {
+          throw new Error('unit approval needs a live grant record');
         }
         if (
-          next.state === 'approved' &&
-          (next.authorityClass === 'reversible' || next.authorityClass === 'irreversible')
+          grant.actionClass !== next.authorityClass ||
+          grant.scope !== next.actionScope ||
+          grant.role !== next.approvedBy
         ) {
-          const grant = await this.readRecord(requiredString(next.grantId, 'grantId'));
-          if (!grant || grant.kind !== 'AuthorityGrant' || !isGrantLive(grant, next.validFrom, this.policy)) {
-            throw new Error('unit approval needs a live grant record');
-          }
-          if (
-            grant.actionClass !== next.authorityClass ||
-            grant.scope !== next.actionScope ||
-            grant.role !== next.approvedBy
-          ) {
-            throw new Error('the approval grant does not match the unit');
-          }
+          throw new Error('the approval grant does not match the unit');
         }
       }
-      if (next.kind === 'AuthorityGrant') {
-        if (next.spent < predecessor.spent) {
-          throw new Error('a grant successor cannot lower spent');
+    }
+    if (next.kind === 'BusinessTrace') assertTraceSuccessor(predecessor, next);
+    if (next.kind === 'AuthorityGrant') {
+      if (next.spent < predecessor.spent) {
+        throw new Error('a grant successor cannot lower spent');
+      }
+      for (const field of ['role', 'scope', 'actionClass', 'budget', 'grantedBy', 'expiresAt']) {
+        if (JSON.stringify(next[field]) !== JSON.stringify(predecessor[field])) {
+          throw new Error(`a grant successor cannot change ${field}`);
         }
-        for (const field of ['role', 'scope', 'actionClass', 'budget', 'grantedBy', 'expiresAt']) {
-          if (JSON.stringify(next[field]) !== JSON.stringify(predecessor[field])) {
-            throw new Error(`a grant successor cannot change ${field}`);
-          }
-        }
       }
-      const live = await this.liveRecords(predecessor.kind);
-      if (live.some((candidate) => candidate.dedupeKey === predecessor.dedupeKey && candidate.id !== predecessor.id)) {
-        throw new Error(`another live ${predecessor.kind} already owns ${predecessor.dedupeKey}`);
-      }
-      if (await fileExists(this.#file(next.kind, next.id))) {
-        throw new Error(`successor already exists: ${next.id}`);
-      }
+    }
+    const live = await this.liveRecords(predecessor.kind);
+    if (live.some((candidate) => candidate.dedupeKey === predecessor.dedupeKey && candidate.id !== predecessor.id)) {
+      throw new Error(`another live ${predecessor.kind} already owns ${predecessor.dedupeKey}`);
+    }
+    if (await fileExists(this.#file(next.kind, next.id))) {
+      throw new Error(`successor already exists: ${next.id}`);
+    }
 
-      if (next.kind === 'BusinessIdea') {
-        if (next.statement !== predecessor.statement) {
-          throw new Error('an idea successor cannot change statement');
-        }
-        if (next.status !== predecessor.status) {
-          const allowed = IDEA_TRANSITIONS[predecessor.status] ?? [];
-          if (!allowed.includes(next.status)) {
-            throw new Error(`idea history refuses ${predecessor.status} → ${next.status}`);
-          }
+    if (next.kind === 'BusinessIdea') {
+      if (next.statement !== predecessor.statement) {
+        throw new Error('an idea successor cannot change statement');
+      }
+      if (next.status !== predecessor.status) {
+        const allowed = IDEA_TRANSITIONS[predecessor.status] ?? [];
+        if (!allowed.includes(next.status)) {
+          throw new Error(`idea history refuses ${predecessor.status} → ${next.status}`);
         }
       }
-      // Close first: a crash here leaves no live record (silence), never two.
-      const closed = {
-        ...predecessor,
-        validTo: next.validFrom,
-        supersededById: next.id,
-      };
-      await fs.writeFile(this.#file(predecessor.kind, predecessor.id), serialize(closed), 'utf8');
-      try {
-        await this.#writeFile(next);
-      } catch (error) {
-        throw new Error(
-          `supersession wrote the closure but not the successor (${predecessor.id} → ${next.id}): ${error.message}`,
-        );
-      }
-      return { predecessor: closed, successor: next };
-    });
+    }
+    // Close first: a crash here leaves no live record (silence), never two.
+    const closed = {
+      ...predecessor,
+      validTo: next.validFrom,
+      supersededById: next.id,
+    };
+    await fs.writeFile(this.#file(predecessor.kind, predecessor.id), serialize(closed), 'utf8');
+    try {
+      await this.#writeFile(next);
+    } catch (error) {
+      throw new Error(
+        `supersession wrote the closure but not the successor (${predecessor.id} → ${next.id}): ${error.message}`,
+      );
+    }
+    return { predecessor: closed, successor: next };
   }
 
   async #writeFile(record) {
@@ -280,6 +288,23 @@ export class CompanyStore {
   #file(kind, id) {
     return safeDataPath(this.dataDir, path.join('company', kind, `${id}.json`));
   }
+}
+
+// A trace only grows: who proposed what, on which inputs, is pinned; edits and
+// suggestions are append-only; a decision is made once; a triage is set once.
+function assertTraceSuccessor(old, next) {
+  for (const field of ['subject', 'proposalId', 'proposedBy', 'owner', 'contextIds']) {
+    if (JSON.stringify(next[field]) !== JSON.stringify(old[field])) throw new Error(`a trace successor cannot change ${field}`);
+  }
+  for (const field of ['edits', 'suggestions']) {
+    if (JSON.stringify(next[field].slice(0, old[field].length)) !== JSON.stringify(old[field])) {
+      throw new Error(`a trace successor cannot rewrite ${field}`);
+    }
+  }
+  if (old.decision !== 'pending' && JSON.stringify([next.decision, next.decisionId, next.decidedBy, next.decidedAt, next.decisionNote]) !== JSON.stringify([old.decision, old.decisionId, old.decidedBy, old.decidedAt, old.decisionNote])) {
+    throw new Error('a trace decision is final');
+  }
+  if (old.triage && JSON.stringify(next.triage) !== JSON.stringify(old.triage)) throw new Error('a triage is final');
 }
 
 export function isLiveRecord(record) {

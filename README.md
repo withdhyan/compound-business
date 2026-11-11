@@ -80,7 +80,7 @@ roles work → cb propose (evidence attached) → founder: cb digest → cb appr
 ```
 
 - Role skills read per task (`cb get`/`cb show` as one principal) and write only by `cb propose`, citing item ids.
-- `/retro` audits each rulebook against the week's eval results, critic verdicts, and founder corrections, then proposes up to 3 edits per role. `cb digest --as <founder>` is the one short batch to approve. An approved edit supersedes the old item; nothing is overwritten.
+- `/retro` audits each rulebook against the week's eval results, critic verdicts, and founder-triaged corrections (only a `system` triage can become a rule; an exception is cited as context; a test goes to a frozen holdout the retro never sees), then proposes up to 3 edits per role. `cb digest --as <founder>` is the one short batch to approve. An approved edit supersedes the old item; nothing is overwritten.
 - `cb eval --record --role <r>` appends to a trend file; `cb eval-trend` shows week-0 against now per role. If recall is flat, the loop is not working, and you will see it.
 - The recipe for running chief, retro and digest on a schedule, with an owner, a kill switch and a one-run lock, is in [`docs/steward.md`](./docs/steward.md). Injection hygiene (the rule of two per agent) is in [`docs/injection.md`](./docs/injection.md).
 - Templates for the memory layer: `templates/policy.example.json`, `role-rulebook.md`, `capital/`, `partnership/unit.md`.

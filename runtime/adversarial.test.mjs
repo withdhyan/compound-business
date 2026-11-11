@@ -153,12 +153,12 @@ test('C2 superseded-by a hidden item looks like superseded-by nothing', async ()
   assert.ok(!JSON.stringify(r).includes('New secret'));
 });
 
-test('C3 MCP ignores a principal smuggled in arguments; the only write tool is propose', async () => {
+test('C3 MCP ignores a principal smuggled in arguments; the only write tools are propose and a trace suggestion', async () => {
   const { ctx } = await setup({ 'strategy.md': doc('label: founders', 'Exit plan') });
   const res = await handleMessage(ctx, 'bot', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'cb_get', arguments: { query: 'exit plan', principal: 'founder', as: 'founder' } } });
   assert.deepEqual(JSON.parse(res.result.content[0].text).results, []);
   const list = await handleMessage(ctx, 'bot', { jsonrpc: '2.0', id: 2, method: 'tools/list' });
-  assert.deepEqual(list.result.tools.map((t) => t.name).sort(), ['cb_cite_check', 'cb_get', 'cb_index', 'cb_propose', 'cb_show']);
+  assert.deepEqual(list.result.tools.map((t) => t.name).sort(), ['cb_cite_check', 'cb_get', 'cb_index', 'cb_propose', 'cb_show', 'cb_trace_list', 'cb_trace_show', 'cb_trace_suggest']);
 });
 
 test('C4 approve and pending by a non-founder, external, or team principal are refused', async () => {

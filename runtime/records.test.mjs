@@ -51,6 +51,7 @@ test('the company record world is closed and prefixed', () => {
       'BusinessReceipt',
       'BusinessRule',
       'BusinessStage',
+      'BusinessTrace',
       'BusinessUnit',
     ],
   );

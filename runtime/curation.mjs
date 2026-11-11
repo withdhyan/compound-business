@@ -6,6 +6,7 @@ import { optionalString, requiredString } from './kernel.mjs';
 import { citeCheck, extractCitations, showItem } from './memory.mjs';
 import { LABELS, canRead, isFounderPrincipal, normalizeLabel } from './policy.mjs';
 import { serializeByDataDir } from './store.mjs';
+import { listTraces, openTrace, recordDecision, recordEdits, traceContext } from './trace.mjs';
 import { safeDataPath } from './safe-path.mjs';
 
 // The curation queue (plan KD6/R10). An agent drafts; a founder approves.
@@ -27,7 +28,8 @@ export function propose(ctx, principal, input, options = {}) {
   return serializeByDataDir(ctx.dataDir, () => proposeLocked(ctx, principal, input, options));
 }
 
-async function proposeLocked(ctx, principal, input, options) {
+// Exported for callers already inside the per-dataDir critical section.
+export async function proposeLocked(ctx, principal, input, options) {
   const who = requiredString(principal, 'principal');
   const label = normalizeLabel(input?.label);
   const owner = optionalString(input?.owner) ?? (label === 'personal' ? who : undefined);
@@ -84,6 +86,15 @@ async function proposeLocked(ctx, principal, input, options) {
     if (error.code !== 'EEXIST') throw error;
     return JSON.parse(await fs.readFile(pendingFile(ctx, id), 'utf8'));
   }
+  // The trace opens with the proposal. If it cannot be written the proposal is
+  // withdrawn, so a pending entry never lacks its trace.
+  try {
+    const context = await traceContext(ctx, who, label, { supersedes, evidence });
+    await openTrace(ctx, { proposalId: id, subject: entry.title, proposedBy: who, owner, ...context });
+  } catch (error) {
+    await fs.rm(pendingFile(ctx, id), { force: true });
+    throw error;
+  }
   return pending;
 }
 
@@ -119,8 +130,39 @@ export function reject(ctx, principal, ids, options = {}) {
     if (!options.stale) {
       for (const id of ids) if (!chosen.some((row) => row.id === id)) throw new Error(`no pending entry: ${id}`);
     }
-    for (const row of chosen) await fs.rm(pendingFile(ctx, row.id), { force: true });
+    for (const row of chosen) {
+      await fs.rm(pendingFile(ctx, row.id), { force: true });
+      await recordDecision(ctx, row.id, { decision: 'rejected', by: principal, note: options.note });
+    }
     return { rejected: chosen.map((row) => row.id) };
+  });
+}
+
+// A founder changes a pending proposal before approving it. Each changed field
+// is appended to the trace (what it said, what it says now): the correction is
+// kept as context, not applied as a rule.
+const EDITABLE = ['title', 'summary', 'body', 'aliases'];
+export function editPending(ctx, principal, id, fields) {
+  return serializeByDataDir(ctx.dataDir, async () => {
+    requireFounder(ctx, principal);
+    const row = (await listPending(ctx, principal)).find((entry) => entry.id === id);
+    if (!row) throw new Error(`no pending entry: ${id}`);
+    const next = { ...row };
+    delete next.stale;
+    const changes = [];
+    for (const field of EDITABLE) {
+      if (fields?.[field] === undefined || fields[field] === true) continue;
+      const value = field === 'aliases' ? cleanAliases(fields[field]) : field === 'body' ? String(fields[field]).trim() : oneLine(requiredString(fields[field], field));
+      const before = field === 'aliases' ? (row.aliases ?? []) : row[field] ?? '';
+      if (JSON.stringify(before) === JSON.stringify(value)) continue;
+      changes.push({ field, from: Array.isArray(before) ? before.join(', ') : before, to: Array.isArray(value) ? value.join(', ') : value });
+      if (Array.isArray(value) ? value.length : value) next[field] = value;
+      else delete next[field];
+    }
+    if (changes.length === 0) throw new Error(`nothing to edit (editable: ${EDITABLE.join(', ')})`);
+    await fs.writeFile(pendingFile(ctx, id), `${JSON.stringify(next, null, 2)}\n`);
+    await recordEdits(ctx, id, principal, changes);
+    return { edited: id, fields: changes.map((change) => change.field) };
   });
 }
 
@@ -157,7 +199,20 @@ export async function digest(ctx, principal) {
       writeDown,
     });
   }
-  return { principal, count: rows.length, rows };
+  // Corrections nobody has classified yet: what was rejected or changed, and
+  // the three things it can become. Traces the founder cannot read are absent.
+  const untriaged = (await listTraces(ctx, principal, { untriaged: true })).traces.map((trace) => ({
+    id: trace.id,
+    label: trace.label,
+    subject: trace.subject,
+    how: trace.decision === 'rejected' ? 'rejected' : `edited ${trace.edits.length}x, ${trace.decision}`,
+    by: trace.decidedBy,
+    note: trace.decisionNote,
+    edits: trace.edits.map((edit) => `${edit.field}: "${edit.from}" -> "${edit.to}"`),
+    suggestions: trace.suggestions.map((entry) => ({ class: entry.class, by: entry.by })),
+    choices: ['exception', 'test', 'system'],
+  }));
+  return { principal, count: rows.length, rows, untriagedCount: untriaged.length, untriaged };
 }
 
 // Alternative words for finding an item (indexed like the title). Short,
@@ -228,6 +283,7 @@ async function approveLocked(ctx, principal, ids) {
       if (error.code !== 'EEXIST') throw error;
     }
     await fs.rm(pendingFile(ctx, id));
+    await recordDecision(ctx, id, { decision: 'approved', by: principal });
   }
   return { approved: wanted };
 }

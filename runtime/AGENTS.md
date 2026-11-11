@@ -52,6 +52,20 @@ decisions, metrics, rules, stage, authority. Nothing here reaches the network.
   the proposer can read, at the same label; one pending edit per target;
   only an approved file under `approved/` can supersede, and the old file is
   never rewritten. Evidence ids must resolve in the proposer's own grant.
+- Decision traces (`trace.mjs`): every proposal opens a `BusinessTrace`;
+  `propose`, edit, `approve` and `reject` append to it inside the same
+  critical section. Its label is the max of the labels it references, and an
+  unreadable trace is indistinguishable from a missing one. A pending trace is
+  visible only to founders and its proposer. The store refuses a trace
+  successor that rewrites identity, edits, suggestions, a decision or a triage.
+- A correction is never a rule by itself. Only a founder sets its class
+  (`triage.mjs`): `exception` is context, `test` is a frozen holdout case,
+  `system` is a pending proposal a founder still approves. Agents may read
+  traces and suggest a class (a note that sets nothing); they cannot triage,
+  record outcomes or read the holdout.
+- The holdout (`<data>/evals/holdout.jsonl`) is append-only and founder-read
+  only; nothing that edits the system trains or tunes on it. `cb eval --file`
+  refuses it and a holdout run never enters the eval history.
 - Untrusted-source content is promoted only by a founder principal passing
   `founderApproved`; an agent cannot assert it for itself.
 - `reportable` (measures) and `counted` (receipts) are derived and re-checked
