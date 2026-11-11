@@ -107,5 +107,14 @@ decisions, metrics, rules, stage, authority. Nothing here reaches the network.
   `["founder"]`), not a literal. Stage names and exit criteria come from the
   policy when configured; the +1-only rule and the founder lever for backward
   moves do not.
+- Audiences (`audience.mjs`): a room's reads are an AND over its members
+  (`canReadAll`); an unmapped pubkey is `guest:<hex>` (public only); our own
+  agents' pubkeys (`policy.agents`) are never members; an empty audience reads
+  public only. `passFor` clamps to a zone ceiling and is the only pass
+  `memory.mjs` accepts; under a pass the MCP server runs read tools only, and
+  `launch.resolve()` is asked on every call (failure = no access). Partner
+  shares add public plus shared `team` items, never a founders or personal
+  item. `FlowTracker` holds egress to any audience that cannot read everything
+  observed, and holds on unresolved input.
 - Nothing here sends, posts, pays, or signs. Effectuators live outside; this
   module records state and gates.

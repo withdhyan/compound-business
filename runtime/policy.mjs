@@ -15,7 +15,13 @@ import { isPlainObject, optionalString, requiredString } from './kernel.mjs';
 //               principal's grant says.
 //   externals   outside people (an artist): name -> share list of item ids or
 //               paths. They read public plus shared team items, never a tier.
+//   pubkeys     optional: hex pubkey -> principal name (see audience.mjs).
+//   agents      optional: hex pubkeys of our own agents; never part of an audience.
+//   partners    optional: name -> { members: [principals], share: [ids|paths] }.
+//               Members read public plus the shared team items; a share never
+//               lifts a founders or personal item.
 //   stages      optional ladder (see stage.mjs); absent = the revenue ladder.
+export const GUEST_PREFIX = 'guest:';
 export const LABELS = Object.freeze(['public', 'team', 'founders', 'personal']);
 
 export function normalizeLabel(value) {
@@ -52,6 +58,30 @@ export function buildPolicy(input = {}) {
     if (!Array.isArray(share)) throw new Error(`external ${name} needs a share list`);
     externals[name] = Object.freeze(share.map((entry) => requiredString(entry, 'share entry')));
   }
+  for (const name of [...Object.keys(principals), ...Object.keys(externals)]) {
+    if (name.startsWith(GUEST_PREFIX)) throw new Error(`${name}: the guest: prefix is reserved`);
+  }
+  const hex = (value, what) => {
+    const key = requiredString(value, what).toLowerCase();
+    if (!/^[0-9a-f]+$/.test(key)) throw new Error(`${what} must be hex`);
+    return key;
+  };
+  const pubkeys = {};
+  for (const [key, name] of Object.entries(input.pubkeys ?? {})) {
+    pubkeys[hex(key, 'pubkey')] = requiredString(name, 'pubkey principal');
+  }
+  const agents = (input.agents ?? []).map((key) => hex(key, 'agent pubkey'));
+  const partners = {};
+  for (const [name, spec] of Object.entries(input.partners ?? {})) {
+    requiredString(name, 'partner');
+    if (!isPlainObject(spec) || !Array.isArray(spec.members) || !Array.isArray(spec.share)) {
+      throw new Error(`partner ${name} needs members and share lists`);
+    }
+    partners[name] = Object.freeze({
+      members: Object.freeze(spec.members.map((member) => requiredString(member, 'partner member'))),
+      share: Object.freeze(spec.share.map((entry) => requiredString(entry, 'share entry'))),
+    });
+  }
   const stages = input.stages === undefined ? null : buildStages(input.stages);
   return Object.freeze({
     owner,
@@ -59,6 +89,9 @@ export function buildPolicy(input = {}) {
     founders: Object.freeze([...founders]),
     principals: Object.freeze(principals),
     externals: Object.freeze(externals),
+    pubkeys: Object.freeze(pubkeys),
+    agents: Object.freeze(agents),
+    partners: Object.freeze(partners),
     stages,
     stageNames: stages ? Object.freeze(stages.map((stage) => stage.name)) : null,
   });
@@ -102,20 +135,34 @@ export function isFounderPrincipal(name, policy = DEFAULT_POLICY) {
 // tier: public items, plus public/team items on its share list (by id or
 // path). Sharing never lifts a founders or personal item.
 export function canRead(policy, principal, label, itemOwner, item) {
-  if (typeof principal === 'string' && Object.hasOwn(policy.externals, principal)) {
+  if (typeof principal !== 'string' || typeof label !== 'string' || !LABELS.includes(label)) return false;
+  if (Object.hasOwn(policy.externals, principal)) {
     if (label === 'public') return true;
     if (label !== 'team' || !item) return false;
     const share = policy.externals[principal];
-    return share.includes(item.id) || share.includes(item.path);
+    return share.includes(item.id) || share.includes(item.path) || partnerShares(policy, principal, item);
   }
-  if (typeof principal !== 'string' || !Object.hasOwn(policy.principals, principal)) return false;
-  if (typeof label !== 'string' || !LABELS.includes(label)) return false;
-  if (LABELS.indexOf(label) > LABELS.indexOf(policy.principals[principal])) return false;
-  if (label === 'personal') {
-    const owner = optionalString(itemOwner) ?? (policy.ownerExplicit ? policy.owner : undefined);
-    return owner !== undefined && principal === owner;
+  // An unmapped pubkey is a guest: an external with no shares.
+  if (principal.startsWith(GUEST_PREFIX)) return label === 'public';
+  if (Object.hasOwn(policy.principals, principal)) {
+    if (LABELS.indexOf(label) <= LABELS.indexOf(policy.principals[principal])) {
+      if (label !== 'personal') return true;
+      const owner = optionalString(itemOwner) ?? (policy.ownerExplicit ? policy.owner : undefined);
+      if (owner !== undefined && principal === owner) return true;
+    }
   }
-  return true;
+  // A partner member adds public plus the partner's shared team items.
+  if (label === 'public') return inAnyPartner(policy, principal);
+  return label === 'team' && Boolean(item) && partnerShares(policy, principal, item);
+}
+
+function inAnyPartner(policy, principal) {
+  return Object.values(policy.partners).some((partner) => partner.members.includes(principal));
+}
+
+function partnerShares(policy, principal, item) {
+  return Object.values(policy.partners).some((partner) => partner.members.includes(principal)
+    && (partner.share.includes(item.id) || partner.share.includes(item.path)));
 }
 
 export async function loadPolicy(file, mustExist = false) {

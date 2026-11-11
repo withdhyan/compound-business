@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { optionalString, requiredString } from './kernel.mjs';
+import { isPass, passCanRead } from './audience.mjs';
 import { LABELS, canRead, isFounderPrincipal } from './policy.mjs';
 import { indexDocs, rankQueries, splitQueries, tokenize } from './search.mjs';
 
@@ -208,8 +209,10 @@ function clip(value, max) {
 // are withheld (and reported through `warn`); collisions with items the
 // principal cannot read are invisible to them.
 function visibleTo(ctx, principal, items, warn = []) {
-  requiredString(principal, 'principal');
-  const readable = items.filter((item) => item.label && canRead(ctx.policy, principal, item.label, item.owner, item));
+  const allowed = isPass(principal)
+    ? (item) => passCanRead(ctx.policy, principal, item)
+    : (requireName(principal), (item) => canRead(ctx.policy, principal, item.label, item.owner, item));
+  const readable = items.filter((item) => item.label && allowed(item));
   const groups = new Map();
   for (const item of readable) groups.set(item.id, [...(groups.get(item.id) ?? []), item]);
   const unique = [];
@@ -219,6 +222,13 @@ function visibleTo(ctx, principal, items, warn = []) {
   }
   return unique;
 }
+
+function requireName(principal) {
+  if (typeof principal !== 'string') throw new Error('principal is required');
+  return requiredString(principal, 'principal');
+}
+
+const who = (principal) => (isPass(principal) ? principal.name : principal);
 
 function publicView(item, byId, visibleIds) {
   const replacementItem = item.supersededBy && visibleIds.has(item.supersededBy) ? byId.get(item.supersededBy) : null;
@@ -248,9 +258,9 @@ export async function buildIndex(ctx, principal) {
   const ids = new Set(byId.keys());
   const sorted = [...visible].sort((a, b) => a.path.localeCompare(b.path));
   return {
-    principal,
+    principal: who(principal),
     items: sorted.map((item) => publicView(item, byId, ids)),
-    warnings: isFounderPrincipal(principal, ctx.policy)
+    warnings: !isPass(principal) && isFounderPrincipal(principal, ctx.policy)
       ? [...warnings, ...duplicates, ...conflicts
           .filter(({ item }) => item.label && canRead(ctx.policy, principal, item.label, item.owner, item))
           .map(({ item, count }) => `${item.path}: ${count} successors claim it (none applied)`)]
@@ -276,7 +286,7 @@ export async function getItems(ctx, principal, query, options = {}) {
   ];
   const plain = [...new Set(queries.flatMap((entry) => (entry.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])))];
   return {
-    principal,
+    principal: who(principal),
     query,
     results: ordered.slice(0, limit).map(({ item }) => ({
       ...publicView(item, byId, ids),
@@ -323,7 +333,7 @@ export async function citeCheck(ctx, principal, text) {
     const replacement = byId.has(item.supersededBy) ? item.supersededBy : null;
     return { id, line, status: 'superseded', replacement };
   });
-  return { principal, citations, ok: citations.every((entry) => entry.status === 'ok') };
+  return { principal: who(principal), citations, ok: citations.every((entry) => entry.status === 'ok') };
 }
 
 // ---- eval (item 11) -------------------------------------------------------------

@@ -2,13 +2,15 @@ import { createInterface } from 'node:readline';
 
 import { propose } from './curation.mjs';
 import { listTraces, showTrace, suggestTriage } from './trace.mjs';
+import { isPass } from './audience.mjs';
 import { buildIndex, citeCheck, getItems, showItem } from './memory.mjs';
 
 // A minimal stdio MCP server (newline-delimited JSON-RPC 2.0) over the
 // read surface (get, show, cite-check, traces) plus two writes: cb_propose, which
 // only queues a pending entry no reader can see, and cb_trace_suggest, a note
 // on a trace that sets nothing. The principal is bound when the
-// server starts (`cb mcp --as <principal>`); no tool takes a principal, a
+// server starts, or `launch.resolve()` returns the current audience pass on
+// every call (see audience.mjs) (`cb mcp --as <principal>`); no tool takes a principal, a
 // trust flag or a founder-approval flag, so an agent cannot widen its grant,
 // promote untrusted content, or approve anything.
 const TOOLS = [
@@ -71,6 +73,10 @@ const TOOLS = [
   },
 ];
 
+// Under an audience pass only the read tools run; propose and trace writes
+// belong to one named principal.
+const PASS_TOOLS = new Set(['cb_index', 'cb_get', 'cb_show', 'cb_cite_check']);
+
 async function runTool(ctx, principal, name, args = {}, launch = {}) {
   if (name === 'cb_index') {
     const { items } = await buildIndex(ctx, principal);
@@ -121,7 +127,11 @@ export async function handleMessage(ctx, principal, message, launch = {}) {
       return reply({ tools: TOOLS });
     case 'tools/call':
       try {
-        const out = await runTool(ctx, principal, message.params?.name, message.params?.arguments, launch);
+        // A resolver is asked on every call; no answer is no access.
+        const who = launch.resolve ? await launch.resolve() : principal;
+        if (typeof who !== 'string' && !isPass(who)) throw new Error('audience unresolved');
+        if (isPass(who) && !PASS_TOOLS.has(message.params?.name)) throw new Error(`tool not available to an audience: ${message.params?.name}`);
+        const out = await runTool(ctx, who, message.params?.name, message.params?.arguments, launch);
         return reply({ content: [{ type: 'text', text: JSON.stringify(out) }] });
       } catch (error) {
         return reply({ isError: true, content: [{ type: 'text', text: error.message }] });
