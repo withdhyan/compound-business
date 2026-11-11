@@ -68,9 +68,14 @@ export function buildPolicy(input = {}) {
   };
   const pubkeys = {};
   for (const [key, name] of Object.entries(input.pubkeys ?? {})) {
-    pubkeys[hex(key, 'pubkey')] = requiredString(name, 'pubkey principal');
+    const lower = hex(key, 'pubkey');
+    if (Object.hasOwn(pubkeys, lower)) throw new Error(`duplicate pubkey: ${lower}`);
+    pubkeys[lower] = requiredString(name, 'pubkey principal');
   }
   const agents = (input.agents ?? []).map((key) => hex(key, 'agent pubkey'));
+  for (const key of agents) {
+    if (Object.hasOwn(pubkeys, key)) throw new Error(`pubkey ${key} is both an agent and a mapped principal`);
+  }
   const partners = {};
   for (const [name, spec] of Object.entries(input.partners ?? {})) {
     requiredString(name, 'partner');
@@ -81,6 +86,11 @@ export function buildPolicy(input = {}) {
       members: Object.freeze(spec.members.map((member) => requiredString(member, 'partner member'))),
       share: Object.freeze(spec.share.map((entry) => requiredString(entry, 'share entry'))),
     });
+  }
+  const known = new Set([...Object.keys(principals), ...Object.keys(externals),
+    ...Object.values(partners).flatMap((partner) => partner.members)]);
+  for (const [key, name] of Object.entries(pubkeys)) {
+    if (!known.has(name)) throw new Error(`pubkey ${key} maps to an unknown principal: ${name}`);
   }
   const stages = input.stages === undefined ? null : buildStages(input.stages);
   return Object.freeze({
@@ -162,7 +172,7 @@ function inAnyPartner(policy, principal) {
 
 function partnerShares(policy, principal, item) {
   return Object.values(policy.partners).some((partner) => partner.members.includes(principal)
-    && (partner.share.includes(item.id) || partner.share.includes(item.path)));
+    && (partner.share.includes(item.id) || (typeof item.fullPath === 'string' && partner.share.includes(item.fullPath))));
 }
 
 export async function loadPolicy(file, mustExist = false) {

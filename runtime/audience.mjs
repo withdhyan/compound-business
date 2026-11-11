@@ -42,8 +42,18 @@ export function passFor(policy, principals, zoneCeiling) {
     name: principals.length ? principals.join('+') : 'public',
     members: Object.freeze([...principals]),
     ceiling,
+    issuedAt: Date.now(),
   });
   PASSES.add(pass);
+  return pass;
+}
+
+// At post time the audience is re-resolved; a pass older than maxAgeMs (or
+// from the future) is not good enough.
+export function requireFresh(pass, maxAgeMs, now = Date.now()) {
+  if (!isPass(pass)) throw new Error('audience unresolved');
+  const age = now - pass.issuedAt;
+  if (!(Number.isFinite(maxAgeMs) && age >= 0 && age <= maxAgeMs)) throw new Error('audience stale');
   return pass;
 }
 
@@ -59,22 +69,45 @@ export class FlowTracker {
   #seen = new Map();
   #unresolved = 0;
 
-  // `item` is a memory item ({ id, label, owner, path }). One the tracker
-  // cannot place (no id, no valid label) makes every later egress hold.
+  // `item` is what a read returned ({ id, label, owner, path }). Nothing is
+  // ever replaced: each distinct (id, label, owner, path) is kept as a frozen
+  // copy, so a later look-alike cannot clear an earlier observation. One the
+  // tracker cannot place holds every later egress: no id, no valid label, or
+  // a personal item whose owner the view did not carry.
   observe(item) {
-    if (!item || typeof item.id !== 'string' || !LABELS.includes(item.label)) {
+    if (!resolvable(item)) {
       this.#unresolved += 1;
       return;
     }
-    this.#seen.set(item.id, item);
+    const copy = copyOf(item);
+    this.#seen.set(JSON.stringify([copy.id, copy.label, copy.owner, copy.path]), copy);
   }
 
-  checkEgress(policy, targetPrincipals) {
-    if (this.#unresolved > 0) return { ok: false, hold: 'unresolved', offending: [] };
-    if (!Array.isArray(targetPrincipals)) return { ok: false, hold: 'unresolved', offending: [] };
-    const offending = [...this.#seen.values()]
-      .filter((item) => !canReadAll(policy, targetPrincipals, item))
-      .map((item) => item.id);
+  // `cited` are ids the output names; `resolve(id)` returns the item for one
+  // (or nothing). An id that does not resolve holds.
+  checkEgress(policy, targetPrincipals, { cited = [], resolve } = {}) {
+    if (this.#unresolved > 0 || !Array.isArray(targetPrincipals) || !Array.isArray(cited)) {
+      return { ok: false, hold: 'unresolved', offending: [] };
+    }
+    const items = [...this.#seen.values()];
+    for (const id of cited) {
+      let found;
+      try {
+        found = typeof resolve === 'function' ? resolve(id) : undefined;
+      } catch {
+        found = undefined;
+      }
+      if (!resolvable(found) || found.id !== id) return { ok: false, hold: 'unresolved', offending: [] };
+      items.push(copyOf(found));
+    }
+    const offending = [...new Set(items.filter((item) => !canReadAll(policy, targetPrincipals, item)).map((item) => item.id))];
     return offending.length === 0 ? { ok: true } : { ok: false, hold: 'audience', offending };
   }
 }
+
+function resolvable(item) {
+  if (!item || typeof item.id !== 'string' || !LABELS.includes(item.label)) return false;
+  return item.label !== 'personal' || typeof item.owner === 'string';
+}
+
+const copyOf = (item) => Object.freeze({ id: item.id, label: item.label, owner: item.owner ?? null, path: item.path ?? null });

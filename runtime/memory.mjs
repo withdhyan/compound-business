@@ -97,12 +97,12 @@ async function scan(root, rootName, rel, out, warnings) {
         warnings.push(`${display}: larger than ${MAX_FILE_BYTES} bytes (skipped)`);
         continue;
       }
-      out.push(fileItem(display, await fs.readFile(file, 'utf8'), stat.mtime));
+      out.push(fileItem(display, await fs.readFile(file, 'utf8'), stat.mtime, file));
     }
   }
 }
 
-function fileItem(display, content, mtime) {
+function fileItem(display, content, mtime, fullPath) {
   const { meta, body, duplicates } = parseFrontmatter(content);
   const heading = /^#\s+(.+)$/m.exec(body)?.[1];
   const title = meta.title ?? heading ?? path.basename(display, '.md');
@@ -117,6 +117,7 @@ function fileItem(display, content, mtime) {
     source: 'file',
     kind: 'file',
     path: display,
+    fullPath,
     label,
     ...(ambiguous ? { issue: `duplicate frontmatter key ${duplicates.join(', ')}` } : {}),
     owner: meta.owner ?? null,
@@ -238,6 +239,7 @@ function publicView(item, byId, visibleIds) {
     kind: item.kind,
     path: item.path,
     label: item.label,
+    owner: item.owner ?? null,
     title: item.title,
     summary: item.summary,
     updated: item.updated,

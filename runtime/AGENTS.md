@@ -112,7 +112,7 @@ decisions, metrics, rules, stage, authority. Nothing here reaches the network.
   agents' pubkeys (`policy.agents`) are never members; an empty audience reads
   public only. `passFor` clamps to a zone ceiling and is the only pass
   `memory.mjs` accepts; under a pass the MCP server runs read tools only, and
-  `launch.resolve()` is asked on every call (failure = no access). Partner
+  `launch.resolve()` is asked on every call; only a real pass enables tools, and an error, a string or nothing is no access (fixed message, no internals). A pass has `issuedAt`; `requireFresh` is for post time. `checkEgress` also takes cited ids and a `resolve(id)`; an id that does not resolve holds. A personal item observed without its owner holds; observations are frozen copies and never overwritten. Partner path shares are absolute file paths, never display paths. Partner
   shares add public plus shared `team` items, never a founders or personal
   item. `FlowTracker` holds egress to any audience that cannot read everything
   observed, and holds on unresolved input.

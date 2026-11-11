@@ -8,9 +8,10 @@ import { buildIndex, citeCheck, getItems, showItem } from './memory.mjs';
 // A minimal stdio MCP server (newline-delimited JSON-RPC 2.0) over the
 // read surface (get, show, cite-check, traces) plus two writes: cb_propose, which
 // only queues a pending entry no reader can see, and cb_trace_suggest, a note
-// on a trace that sets nothing. The principal is bound when the
-// server starts, or `launch.resolve()` returns the current audience pass on
-// every call (see audience.mjs) (`cb mcp --as <principal>`); no tool takes a principal, a
+// on a trace that sets nothing. The principal is bound when the server starts
+// (`cb mcp --as <principal>`), or `launch.resolve()` returns the current
+// audience pass on every call (see audience.mjs); a resolver that fails or
+// returns a non-pass gives no access. No tool takes a principal, a
 // trust flag or a founder-approval flag, so an agent cannot widen its grant,
 // promote untrusted content, or approve anything.
 const TOOLS = [
@@ -85,6 +86,7 @@ async function runTool(ctx, principal, name, args = {}, launch = {}) {
       items: items.map((item) => ({
         id: item.id,
         label: item.label,
+        owner: item.owner,
         title: item.title,
         summary: item.summary,
         updated: item.updated,
@@ -127,10 +129,19 @@ export async function handleMessage(ctx, principal, message, launch = {}) {
       return reply({ tools: TOOLS });
     case 'tools/call':
       try {
-        // A resolver is asked on every call; no answer is no access.
-        const who = launch.resolve ? await launch.resolve() : principal;
-        if (typeof who !== 'string' && !isPass(who)) throw new Error('audience unresolved');
-        if (isPass(who) && !PASS_TOOLS.has(message.params?.name)) throw new Error(`tool not available to an audience: ${message.params?.name}`);
+        // A resolver is asked on every call. Only a real pass enables tools;
+        // anything else (error, string, nothing) is no access, with a fixed
+        // message so resolver internals never reach the agent.
+        let who = principal;
+        if (launch.resolve) {
+          try {
+            who = await launch.resolve();
+          } catch {
+            who = null;
+          }
+          if (!isPass(who)) throw new Error('audience unresolved');
+          if (!PASS_TOOLS.has(message.params?.name)) throw new Error(`tool not available to an audience: ${message.params?.name}`);
+        }
         const out = await runTool(ctx, who, message.params?.name, message.params?.arguments, launch);
         return reply({ content: [{ type: 'text', text: JSON.stringify(out) }] });
       } catch (error) {
