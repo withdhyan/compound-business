@@ -33,21 +33,31 @@ export async function traceContext(ctx, who, label, { supersedes, evidence } = {
   const ids = [...new Set([...(supersedes ? [supersedes] : []), ...extractCitations((evidence ?? []).join('\n')).map((c) => c.id)])];
   const labels = [label];
   const contextIds = [];
+  const owners = new Set();
   for (const id of ids) {
     const item = await showItem(ctx, who, id).catch(() => null);
     if (!item) continue;
     contextIds.push(id);
     labels.push(item.label);
+    // `personal` is owner-only, so the reader of a personal item is its owner.
+    if (item.label === 'personal') owners.add(who);
   }
-  return { contextIds, label: maxLabel(labels) };
+  const top = maxLabel(labels);
+  if (top !== 'personal') return { contextIds, label: top };
+  // A personal trace belongs to the owner of the personal items it cites (or of
+  // the personal proposal itself). Never to a default owner: no owner, or more
+  // than one, and the proposal is refused.
+  if (label === 'personal') owners.add(who);
+  if (owners.size !== 1) throw new Error('a personal trace needs exactly one owner');
+  return { contextIds, label: top, owner: [...owners][0] };
 }
 
 // locked
 export async function openTrace(ctx, { proposalId, subject, proposedBy, owner, label, contextIds }) {
   const all = (await ctx.store.listRecords(KIND)).filter((row) => row.proposalId === proposalId);
-  const seq = new Set(all.map((row) => row.dedupeKey)).size;
+  const seq = Math.max(-1, ...all.map((row) => Number(row.dedupeKey.split(':').pop()))) + 1;
   const record = buildBusinessTrace(
-    { proposalId, subject, proposedBy, owner: label === 'personal' ? owner : undefined, label, contextIds, dedupeKey: traceKey(proposalId, seq) },
+    { proposalId, subject, proposedBy, owner: label === 'personal' ? requiredString(owner, 'owner') : undefined, label, contextIds, dedupeKey: traceKey(proposalId, seq) },
     () => new Date(),
   );
   await ctx.store.writeRecordNow(record);
@@ -68,7 +78,7 @@ async function successor(ctx, old, patch) {
   }
   const at = new Date(Math.max(Date.now(), Date.parse(old.validFrom) + 1)).toISOString();
   const record = buildBusinessTrace(
-    { ...fields, ...patch, label: old.label, dedupeKey: old.dedupeKey, supersedes: old.id, validFrom: at, eventAt: at, ingestedAt: at },
+    { ...fields, ...patch, label: patch.label ?? old.label, dedupeKey: old.dedupeKey, supersedes: old.id, validFrom: at, eventAt: at, ingestedAt: at },
     () => new Date(at),
   );
   await ctx.store.supersedeRecordNow(old.id, record);
@@ -82,7 +92,20 @@ export async function recordEdits(ctx, proposalId, by, changes) {
   if (!old || changes.length === 0) return null;
   const at = new Date().toISOString();
   const edits = [...old.edits, ...changes.map((c) => ({ at, by, field: c.field, from: clip(c.from), to: clip(c.to) }))];
-  return successor(ctx, old, { edits });
+  // The edit's new text may cite items above the trace label: the label rises
+  // to cover them (the max rule), and the cited ids join the context.
+  const cited = [...new Set(changes.flatMap((c) => extractCitations(String(c.to)).map((m) => m.id)))];
+  const contextIds = [...old.contextIds];
+  const labels = [old.label];
+  for (const id of cited) {
+    const item = await showItem(ctx, by, id).catch(() => null);
+    if (!item) continue;
+    labels.push(item.label);
+    if (!contextIds.includes(id)) contextIds.push(id);
+  }
+  const label = maxLabel(labels);
+  const raised = LABELS.indexOf(label) > LABELS.indexOf(old.label);
+  return successor(ctx, old, { edits, contextIds, ...(raised ? { label, ...(label === 'personal' && !old.owner ? { owner: by } : {}) } : {}) });
 }
 
 export async function recordDecision(ctx, proposalId, { decision, by, note }) {
@@ -105,7 +128,14 @@ function visible(ctx, principal, row) {
   return row.decision !== 'pending' || isFounderPrincipal(principal, ctx.policy) || row.proposedBy === principal;
 }
 
-function view(row) {
+// What a reader may see of a trace. A `test` triage points at a holdout case, so
+// non-founders get the class only (no case id, no note: the id is a hash of the
+// case and would confirm a guess offline). A suggestion's note is free text a
+// non-founder wrote at the trace label: only founders and its author see it.
+function view(ctx, principal, row) {
+  const founder = isFounderPrincipal(principal, ctx.policy);
+  const triage = !row.triage || founder || row.triage.class !== 'test' ? row.triage : { class: row.triage.class, by: row.triage.by, at: row.triage.at };
+  const suggestions = row.suggestions.map((entry) => (founder || entry.by === principal ? entry : { class: entry.class, by: entry.by, at: entry.at }));
   return {
     id: row.id,
     label: row.label,
@@ -120,8 +150,8 @@ function view(row) {
     decidedAt: row.decidedAt,
     decisionNote: row.decisionNote,
     outcome: row.outcome,
-    triage: row.triage,
-    suggestions: row.suggestions,
+    triage,
+    suggestions,
     created: row.eventAt,
     updated: row.validFrom,
     isCorrection: isCorrection(row),
@@ -137,8 +167,12 @@ export async function listTraces(ctx, principal, options = {}) {
   requiredString(principal, 'principal');
   const rows = (await ctx.store.liveRecords(KIND)).filter((row) => visible(ctx, principal, row));
   const chosen = options.untriaged ? rows.filter((row) => isCorrection(row) && !row.triage) : rows;
-  return { principal, count: chosen.length, traces: chosen.map(view) };
+  return { principal, count: chosen.length, traces: chosen.map((row) => view(ctx, principal, row)) };
 }
+
+const round = (row) => Number(row.dedupeKey.split(':').pop());
+// A proposal id names its rounds oldest first; by proposal id the newest round wins.
+const byRound = (a, b) => round(a) - round(b);
 
 // Accepts a trace id (any version) or the proposal id. An unreadable trace is
 // indistinguishable from a missing one.
@@ -148,7 +182,7 @@ async function findLive(ctx, principal, id) {
   const hit = all.find((row) => row.id === wanted);
   const live = hit
     ? all.find((row) => row.dedupeKey === hit.dedupeKey && !row.validTo && !row.supersededById)
-    : (await ctx.store.liveRecords(KIND)).filter((row) => row.proposalId === wanted).pop();
+    : (await ctx.store.liveRecords(KIND)).filter((row) => row.proposalId === wanted).sort(byRound).pop();
   if (!live || !visible(ctx, principal, live)) throw new Error(`no trace: ${wanted}`);
   return live;
 }
@@ -156,7 +190,7 @@ async function findLive(ctx, principal, id) {
 export async function showTrace(ctx, principal, id) {
   const live = await findLive(ctx, principal, id);
   const history = (await ctx.store.listRecords(KIND)).filter((row) => row.dedupeKey === live.dedupeKey).length;
-  return { ...view(live), versions: history };
+  return { ...view(ctx, principal, live), versions: history };
 }
 
 // ---- writes ---------------------------------------------------------------------
@@ -170,7 +204,7 @@ export function recordOutcome(ctx, principal, id, text) {
     requireFounder(ctx, principal, 'records an outcome');
     const old = await findLive(ctx, principal, id);
     const outcome = clip(requiredString(text, 'outcome'), 2000);
-    return view(await successor(ctx, old, { outcome }));
+    return view(ctx, principal, await successor(ctx, old, { outcome }));
   });
 }
 
@@ -180,9 +214,9 @@ export function suggestTriage(ctx, principal, id, cls, note) {
   return serializeByDataDir(ctx.dataDir, async () => {
     if (!TRIAGE_CLASSES.includes(cls)) throw new Error(`class must be one of: ${TRIAGE_CLASSES.join(', ')}`);
     const old = await findLive(ctx, principal, id);
-    if (old.suggestions.some((entry) => entry.by === principal && entry.class === cls)) return view(old);
+    if (old.suggestions.some((entry) => entry.by === principal && entry.class === cls)) return view(ctx, principal, old);
     const suggestions = [...old.suggestions, { class: cls, by: principal, at: new Date().toISOString(), note: optionalString(note) ? clip(note, 500) : null }];
-    return view(await successor(ctx, old, { suggestions }));
+    return view(ctx, principal, await successor(ctx, old, { suggestions }));
   });
 }
 
@@ -191,7 +225,7 @@ export function suggestTriage(ctx, principal, id, cls, note) {
 export async function setTriage(ctx, principal, id, triage) {
   const old = await findLive(ctx, principal, id);
   if (old.triage) throw new Error(`${old.id} is already triaged as ${old.triage.class}`);
-  return view(await successor(ctx, old, { triage: { ...triage, by: principal, at: new Date().toISOString() } }));
+  return view(ctx, principal, await successor(ctx, old, { triage: { ...triage, by: principal, at: new Date().toISOString() } }));
 }
 
 export { findLive, requireFounder };

@@ -58,6 +58,16 @@ decisions, metrics, rules, stage, authority. Nothing here reaches the network.
   unreadable trace is indistinguishable from a missing one. A pending trace is
   visible only to founders and its proposer. The store refuses a trace
   successor that rewrites identity, edits, suggestions, a decision or a triage.
+- Writers in different processes (every `cb mcp` server, every CLI run) are
+  serialized by a lockfile `<data>/.cb.lock` (`wx`, owner pid; a dead owner or
+  a lock older than 60 s is broken by rename), taken inside
+  `serializeByDataDir`. Record, pending and closure writes are temp-file plus
+  rename/link, so readers never see torn JSON.
+- A personal trace is owned by the author of the personal items it cites, never
+  a default owner (none or several owners: refused). Its label can rise (a
+  founder edit citing a higher item), never fall. Non-founders see a `test`
+  triage as its class only (no case id, no note) and only their own suggestion
+  notes.
 - A correction is never a rule by itself. Only a founder sets its class
   (`triage.mjs`): `exception` is context, `test` is a frozen holdout case,
   `system` is a pending proposal a founder still approves. Agents may read

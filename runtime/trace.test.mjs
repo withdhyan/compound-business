@@ -177,3 +177,96 @@ test('mcp: traces are readable and suggestable, never triage or outcome', async 
   // the correction is still untriaged for the founder's digest
   assert.equal((await digest(ctx, 'founder')).untriagedCount, 1);
 });
+
+// ---- review fixes (T1, T3/T7, T4, T5, T8) -------------------------------------------
+
+async function personalSetup() {
+  const { dataDir, ctx } = await setup();
+  await fs.writeFile(path.join(ctx.memoryDirs[0], 'mine.md'), '---\nid: mem_cccccccccccccccc\nlabel: personal\nowner: cofounder\ntitle: Cofounder private note\n---\nPrivate.\n');
+  return { dataDir, ctx };
+}
+
+test('T1: a personal trace belongs to the owner of the personal items it cites, never the policy owner', async () => {
+  const { ctx } = await personalSetup();
+  const row = await propose(ctx, 'cofounder', entry({ evidence: ['mem_cccccccccccccccc'] }));
+  const trace = await showTrace(ctx, 'cofounder', row.id);
+  assert.equal(trace.label, 'personal');
+  await assert.rejects(showTrace(ctx, 'founder', row.id), /no trace/, 'the policy owner does not get it');
+  assert.equal((await listTraces(ctx, 'founder')).count, 0);
+  await reject(ctx, 'cofounder', [row.id]);
+  assert.equal((await digest(ctx, 'founder')).untriagedCount, 0);
+  assert.equal((await digest(ctx, 'cofounder')).untriagedCount, 1);
+});
+
+test('T1: with no explicit owner and two founders a personal trace is still its author\'s', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cb-trace-'));
+  const open = buildPolicy({ founders: ['founder', 'cofounder'], principals: { founder: 'personal', cofounder: 'personal', scribe: 'team' } });
+  const ctx = { store: createCompanyStore({ dataDir, policy: open }), policy: open, dataDir, memoryDirs: [path.join(dataDir, 'memory')] };
+  const row = await propose(ctx, 'cofounder', { label: 'personal', title: 'Mine', quote: 'q', source: 's' });
+  assert.equal((await showTrace(ctx, 'cofounder', row.id)).label, 'personal');
+  await assert.rejects(showTrace(ctx, 'founder', row.id), /no trace/);
+});
+
+test('T3/T7: non-founders see no holdout case id or note, and only their own suggestion notes', async () => {
+  const { ctx } = await setup();
+  const { id } = await propose(ctx, 'scribe', entry());
+  await reject(ctx, 'founder', [id]);
+  await suggestTriage(ctx, 'scribe', id, 'test', 'scribe thinks so');
+  await suggestTriage(ctx, 'helper', id, 'system', 'helper private words');
+  const { triage } = await import('./triage.mjs');
+  await triage(ctx, 'founder', id, 'test', { query: 'ship fridays', expect: ['mem_aaaaaaaaaaaaaaaa'], note: 'tests friday recall' });
+  const asFounder = await showTrace(ctx, 'founder', id);
+  assert.match(asFounder.triage.caseId, /^case_/);
+  assert.equal(asFounder.suggestions.length, 2);
+  assert.equal(asFounder.suggestions[1].note, 'helper private words');
+  const asScribe = await showTrace(ctx, 'scribe', id);
+  assert.deepEqual(Object.keys(asScribe.triage).sort(), ['at', 'by', 'class']);
+  assert.equal(asScribe.suggestions.find((s) => s.by === 'scribe').note, 'scribe thinks so');
+  assert.equal('note' in asScribe.suggestions.find((s) => s.by === 'helper'), false);
+  const listed = (await listTraces(ctx, 'teammate')).traces[0];
+  assert.ok(!JSON.stringify(listed).includes('case_') && !JSON.stringify(listed).includes('friday recall') && !JSON.stringify(listed).includes('private words'));
+  const viaMcp = JSON.stringify((await handleMessage(ctx, 'teammate', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'cb_trace_show', arguments: { id } } })).result);
+  assert.ok(!viaMcp.includes('case_') && !viaMcp.includes('private words'));
+});
+
+test('T4: a pending proposal displaced by a founder\'s edit closes its trace', async () => {
+  const { ctx } = await setup();
+  const agent = await propose(ctx, 'scribe', entry({ title: 'Rules v2', supersedes: 'mem_aaaaaaaaaaaaaaaa', body: 'agent version' }));
+  const mine = await propose(ctx, 'founder', entry({ title: 'Rules v2 (founder)', quote: 'founder words', supersedes: 'mem_aaaaaaaaaaaaaaaa', body: 'founder version' }));
+  assert.notEqual(mine.id, agent.id);
+  const displaced = await showTrace(ctx, 'founder', agent.id);
+  assert.equal(displaced.decision, 'rejected');
+  assert.match(displaced.decisionNote, /displaced/);
+  assert.equal(displaced.isCorrection, true);
+});
+
+test('T5: a re-proposal gets a fresh trace key; the proposal id resolves to the newest round, the trace id to its own', async () => {
+  const { ctx } = await setup();
+  const first = await propose(ctx, 'scribe', entry());
+  await reject(ctx, 'founder', [first.id]);
+  await propose(ctx, 'scribe', entry());
+  await reject(ctx, 'founder', [first.id]);
+  const third = await propose(ctx, 'scribe', entry());
+  const keys = (await ctx.store.listRecords('BusinessTrace')).map((r) => r.dedupeKey);
+  assert.equal(new Set(keys).size, 3);
+  for (let i = 0; i < 5; i += 1) assert.equal((await showTrace(ctx, 'founder', third.id)).decision, 'pending');
+  await recordOutcome(ctx, 'founder', third.id, 'round three outcome');
+  const rounds = (await listTraces(ctx, 'founder')).traces;
+  assert.deepEqual(rounds.filter((t) => t.outcome).map((t) => t.decision), ['pending']);
+  const old = rounds.find((t) => t.decision === 'rejected');
+  assert.equal((await showTrace(ctx, 'founder', old.id)).decision, 'rejected');
+});
+
+test('T8: a founder edit citing a higher item raises the trace label', async () => {
+  const { ctx } = await setup();
+  const { id } = await propose(ctx, 'scribe', entry());
+  assert.equal((await showTrace(ctx, 'scribe', id)).label, 'team');
+  await editPending(ctx, 'founder', id, { body: 'see mem_bbbbbbbbbbbbbbbb for the plan' });
+  const raised = await showTrace(ctx, 'founder', id);
+  assert.equal(raised.label, 'founders');
+  assert.ok(raised.contextIds.includes('mem_bbbbbbbbbbbbbbbb'));
+  await assert.rejects(showTrace(ctx, 'scribe', id), /no trace/, 'the team proposer no longer reads the edit text');
+  assert.equal((await listTraces(ctx, 'scribe')).count, 0);
+  await reject(ctx, 'founder', [id]);
+  assert.equal((await showTrace(ctx, 'founder', id)).edits.length, 1);
+});

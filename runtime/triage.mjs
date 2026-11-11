@@ -141,6 +141,12 @@ export async function runHoldout(ctx, principal) {
   return { principal, queryCases: queries.length, draftCases: cases.length - queries.length, report };
 }
 
-export function isHoldoutPath(ctx, file) {
-  return path.resolve(file) === path.resolve(holdoutFile(ctx));
+// Same file by identity, not by spelling: realpath, then device and inode
+// (catches case-insensitive filesystems, symlinks and hard links). If the
+// holdout does not exist yet there is nothing to leak.
+export async function isHoldoutPath(ctx, file) {
+  const holdout = holdoutFile(ctx);
+  if (path.resolve(file) === path.resolve(holdout)) return true;
+  const [a, b] = await Promise.all([fs.stat(file).catch(() => null), fs.stat(holdout).catch(() => null)]);
+  return Boolean(a && b && a.dev === b.dev && a.ino === b.ino);
 }

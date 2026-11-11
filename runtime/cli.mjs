@@ -392,7 +392,7 @@ export async function executeMemoryCommand(group, rest, flags, ctx) {
       return { value: await executeRecordCommand(rest, flags, ctx, as()), exitCode: 0 };
     case 'eval': {
       // The holdout is never an eval input: nothing trains or tunes on it.
-      if (typeof flags.file === 'string' && isHoldoutPath(ctx, flags.file)) throw new Error('the frozen holdout is not an eval file (use `cb holdout run`)');
+      if (typeof flags.file === 'string' && await isHoldoutPath(ctx, flags.file)) throw new Error('the frozen holdout is not an eval file (use `cb holdout run`)');
       const tasks = await readJsonFile(flags.file, 'tasks');
       const report = await runEval(ctx, as(), Array.isArray(tasks) ? tasks : tasks.tasks);
       if (flags.record === true) await recordEval(ctx, report, { role: typeof flags.role === 'string' ? flags.role : undefined });

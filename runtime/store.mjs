@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { promises as fs, realpathSync } from 'node:fs';
 import path from 'node:path';
 
@@ -6,7 +7,7 @@ import {
   isPlainObject,
   requiredString,
 } from './kernel.mjs';
-import { DEFAULT_POLICY } from './policy.mjs';
+import { DEFAULT_POLICY, LABELS } from './policy.mjs';
 import {
   IDEA_TRANSITIONS,
   UNIT_TRANSITIONS,
@@ -18,18 +19,100 @@ import {
 
 // Mutations are serialized per resolved dataDir, not per store instance, so two
 // stores pointed at the same directory cannot race each other's liveness
-// checks. Cross-process serialization is the daemon's lock, not this module's.
+// checks. Two layers: an in-process promise queue, and a cross-process lockfile
+// (<dataDir>/.cb.lock, created with `wx`, owner pid inside). Every `cb mcp`
+// server and every CLI run writes the store, so the queue alone is not enough.
+// A lock whose owner pid is gone, or that is older than LOCK_STALE_MS, is
+// broken by renaming it aside (one winner), never by deleting it in place.
 const MUTATION_QUEUES = new Map();
+const LOCK_STALE_MS = 60_000;
+const LOCK_WAIT_MS = 30_000;
 
 export function serializeByDataDir(dataDir, operation) {
   const key = queueKey(dataDir);
   const previous = MUTATION_QUEUES.get(key) ?? Promise.resolve();
-  const run = previous.then(operation, operation);
+  const guarded = () => withFileLock(key, operation);
+  const run = previous.then(guarded, guarded);
   MUTATION_QUEUES.set(key, run.then(
     () => undefined,
     () => undefined,
   ));
   return run;
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+async function withFileLock(dir, operation) {
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, '.cb.lock');
+  const token = `${process.pid}:${randomUUID()}`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      const handle = await fs.open(file, 'wx');
+      await handle.writeFile(JSON.stringify({ pid: process.pid, token, at: Date.now() }));
+      await handle.close();
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      await breakIfStale(file);
+      if (Date.now() > deadline) throw new Error('could not take the data directory lock (held by another process)');
+      await new Promise((resolve) => setTimeout(resolve, 3 + Math.random() * 12));
+    }
+  }
+  try {
+    return await operation();
+  } finally {
+    // Release only our own lock (a stale-breaker may have replaced it).
+    const held = await fs.readFile(file, 'utf8').catch(() => '');
+    if (held.includes(token)) await fs.rm(file, { force: true });
+  }
+}
+
+async function breakIfStale(file) {
+  let info;
+  let text;
+  try {
+    [info, text] = [await fs.stat(file), await fs.readFile(file, 'utf8')];
+  } catch {
+    return;
+  }
+  let owner = null;
+  try {
+    owner = JSON.parse(text);
+  } catch {
+    // a lock mid-write has no body yet: only age can condemn it
+  }
+  const dead = owner ? !pidAlive(owner.pid) : false;
+  if (!dead && Date.now() - info.mtimeMs <= LOCK_STALE_MS) return;
+  const aside = `${file}.stale-${randomUUID()}`;
+  try {
+    await fs.rename(file, aside);
+    await fs.rm(aside, { force: true });
+  } catch {
+    // someone else broke or released it first
+  }
+}
+
+// Readers never see a torn file: write a temp file beside the target, then
+// rename it over (or, for exclusive creates, hard-link it into place, which
+// fails with EEXIST like `wx`).
+export async function writeFileAtomic(file, text, { exclusive = false } = {}) {
+  const temp = `${file}.tmp-${process.pid}-${randomUUID()}`;
+  await fs.writeFile(temp, text, 'utf8');
+  try {
+    if (exclusive) await fs.link(temp, file);
+    else await fs.rename(temp, file);
+  } finally {
+    await fs.rm(temp, { force: true });
+  }
 }
 
 function queueKey(dataDir) {
@@ -171,7 +254,10 @@ export class CompanyStore {
     }
     // A label is a one-way door: a successor may add a label to a legacy
     // unlabelled record, never change or drop one (that would launder access).
-    if (predecessor.label !== undefined && next.label !== predecessor.label) {
+    // (A trace is the one exception: its label is the max of what it
+    // references, so it may rise when a founder's edit cites a higher item.)
+    if (predecessor.label !== undefined && next.label !== predecessor.label
+      && !(next.kind === 'BusinessTrace' && LABELS.indexOf(next.label) > LABELS.indexOf(predecessor.label))) {
       throw new Error('a successor cannot change label');
     }
     // A measure's design is pinned once it is reportable or has data: a
@@ -260,7 +346,7 @@ export class CompanyStore {
       validTo: next.validFrom,
       supersededById: next.id,
     };
-    await fs.writeFile(this.#file(predecessor.kind, predecessor.id), serialize(closed), 'utf8');
+    await writeFileAtomic(this.#file(predecessor.kind, predecessor.id), serialize(closed));
     try {
       await this.#writeFile(next);
     } catch (error) {
@@ -275,7 +361,7 @@ export class CompanyStore {
     const file = this.#file(record.kind, record.id);
     await fs.mkdir(path.dirname(file), { recursive: true });
     try {
-      await fs.writeFile(file, serialize(record), { encoding: 'utf8', flag: 'wx' });
+      await writeFileAtomic(file, serialize(record), { exclusive: true });
     } catch (error) {
       if (error.code === 'EEXIST') {
         throw new Error(`company record already exists: ${record.id}`);
@@ -293,10 +379,14 @@ export class CompanyStore {
 // A trace only grows: who proposed what, on which inputs, is pinned; edits and
 // suggestions are append-only; a decision is made once; a triage is set once.
 function assertTraceSuccessor(old, next) {
-  for (const field of ['subject', 'proposalId', 'proposedBy', 'owner', 'contextIds']) {
+  for (const field of ['subject', 'proposalId', 'proposedBy']) {
     if (JSON.stringify(next[field]) !== JSON.stringify(old[field])) throw new Error(`a trace successor cannot change ${field}`);
   }
-  for (const field of ['edits', 'suggestions']) {
+  // An owner is set once, and only when the label rises to personal.
+  if (old.owner !== undefined ? next.owner !== old.owner : next.owner !== undefined && next.label !== 'personal') {
+    throw new Error('a trace successor cannot change owner');
+  }
+  for (const field of ['contextIds', 'edits', 'suggestions']) {
     if (JSON.stringify(next[field].slice(0, old[field].length)) !== JSON.stringify(old[field])) {
       throw new Error(`a trace successor cannot rewrite ${field}`);
     }

@@ -216,3 +216,22 @@ test('cli: triage and holdout commands', async () => {
   assert.equal((await run('holdout', ['run'], { as: 'founder' })).value.report.recall, 1);
   await assert.rejects(run('holdout', ['list'], { as: 'scribe' }), /only a founder/);
 });
+
+test('T6: the eval guard compares file identity (hard link, symlink, other spelling), not the path string', async () => {
+  const { ctx, dataDir } = await setup();
+  const id = await rejected(ctx);
+  await triage(ctx, 'founder', id, 'test', { query: 'discount policy', expect: [RULES] });
+  const file = holdoutFile(ctx);
+  const hard = path.join(dataDir, 'copy-hard.jsonl');
+  const soft = path.join(dataDir, 'copy-soft.jsonl');
+  await fs.link(file, hard);
+  await fs.symlink(file, soft);
+  const other = path.join(dataDir, 'other.json');
+  await fs.writeFile(other, '[]');
+  const { isHoldoutPath } = await import('./triage.mjs');
+  assert.equal(await isHoldoutPath(ctx, hard), true);
+  assert.equal(await isHoldoutPath(ctx, soft), true);
+  assert.equal(await isHoldoutPath(ctx, path.join(dataDir, 'evals', '..', 'evals', 'holdout.jsonl')), true);
+  assert.equal(await isHoldoutPath(ctx, other), false);
+  for (const f of [hard, soft]) await assert.rejects(executeMemoryCommand('eval', [], { as: 'founder', file: f }, ctx), /frozen holdout/);
+});

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { optionalString, requiredString } from './kernel.mjs';
 import { citeCheck, extractCitations, showItem } from './memory.mjs';
 import { LABELS, canRead, isFounderPrincipal, normalizeLabel } from './policy.mjs';
-import { serializeByDataDir } from './store.mjs';
+import { serializeByDataDir, writeFileAtomic } from './store.mjs';
 import { listTraces, openTrace, recordDecision, recordEdits, traceContext } from './trace.mjs';
 import { safeDataPath } from './safe-path.mjs';
 
@@ -72,6 +72,8 @@ export async function proposeLocked(ctx, principal, input, options) {
       // item; anyone else is told only that an edit is already waiting.
       if (isFounderPrincipal(who, ctx.policy) && !isFounderPrincipal(rival.proposedBy, ctx.policy)) {
         await fs.rm(pendingFile(ctx, rival.id), { force: true });
+        // The displaced proposal is a correction: close its trace.
+        await recordDecision(ctx, rival.id, { decision: 'rejected', by: who, note: `displaced by a founder's edit ${id}` });
       } else {
         throw new Error('a pending edit already targets this item');
       }
@@ -81,7 +83,7 @@ export async function proposeLocked(ctx, principal, input, options) {
   const dir = pendingDir(ctx);
   await fs.mkdir(dir, { recursive: true });
   try {
-    await fs.writeFile(pendingFile(ctx, id), `${JSON.stringify(pending, null, 2)}\n`, { flag: 'wx' });
+    await writeFileAtomic(pendingFile(ctx, id), `${JSON.stringify(pending, null, 2)}\n`, { exclusive: true });
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
     return JSON.parse(await fs.readFile(pendingFile(ctx, id), 'utf8'));
@@ -90,7 +92,7 @@ export async function proposeLocked(ctx, principal, input, options) {
   // withdrawn, so a pending entry never lacks its trace.
   try {
     const context = await traceContext(ctx, who, label, { supersedes, evidence });
-    await openTrace(ctx, { proposalId: id, subject: entry.title, proposedBy: who, owner, ...context });
+    await openTrace(ctx, { proposalId: id, subject: entry.title, proposedBy: who, ...context });
   } catch (error) {
     await fs.rm(pendingFile(ctx, id), { force: true });
     throw error;
@@ -160,7 +162,7 @@ export function editPending(ctx, principal, id, fields) {
       else delete next[field];
     }
     if (changes.length === 0) throw new Error(`nothing to edit (editable: ${EDITABLE.join(', ')})`);
-    await fs.writeFile(pendingFile(ctx, id), `${JSON.stringify(next, null, 2)}\n`);
+    await writeFileAtomic(pendingFile(ctx, id), `${JSON.stringify(next, null, 2)}\n`);
     await recordEdits(ctx, id, principal, changes);
     return { edited: id, fields: changes.map((change) => change.field) };
   });
